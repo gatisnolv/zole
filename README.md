@@ -1,4 +1,4 @@
-# zole
+# Zole
 
 Evolution Scala bootcamp course project repository.
 
