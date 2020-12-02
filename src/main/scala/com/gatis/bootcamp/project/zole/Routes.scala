@@ -1,7 +1,7 @@
 package com.gatis.bootcamp.project.zole
-import cats.effect.{Blocker, ExitCode, IO, IOApp}
-import org.http4s.server.blaze.BlazeServerBuilder
-import scala.concurrent.ExecutionContext
+
+// import cats.effect.{Blocker, IO}
+import cats.effect.{IO}
 import org.http4s.dsl.io._
 import org.http4s._
 import cats.syntax.all._
@@ -13,8 +13,7 @@ case class CardR(rank: String, suit: String)
 
 case class Registration(code: String, name: String)
 
-object ZoleHttpServer extends IOApp {
-
+object Routes {
   val helloRoute = {
     HttpRoutes.of[IO] { case GET -> Root =>
       Ok(s"Start a new game by sending a POST request to /new")
@@ -129,14 +128,4 @@ object ZoleHttpServer extends IOApp {
   }
 
   private[zole] val httpApp = { helloRoute <+> cardRoute <+> gameRoutes }.orNotFound
-
-  override def run(args: List[String]): IO[ExitCode] = BlazeServerBuilder[IO](
-    ExecutionContext.global
-  )
-    .bindHttp(port = 9001, host = "localhost")
-    .withHttpApp(httpApp)
-    .serve
-    .compile
-    .drain
-    .as(ExitCode.Success)
 }
