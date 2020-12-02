@@ -3,7 +3,14 @@ package com.gatis.bootcamp.project.zole
 import cats.syntax.either._
 
 sealed abstract class Suit private (val character: Char) {
-  override def toString: String = character.toString
+  import Suit._
+  // override def toString: String = character.toString
+  override def toString: String = this match {
+    case Clubs    => "♣"
+    case Spades   => "♠"
+    case Hearts   => "♥"
+    case Diamonds => "♦"
+  }
   def queenAndJackSuitStrength = Suit.ordered.indexOf(this)
 }
 

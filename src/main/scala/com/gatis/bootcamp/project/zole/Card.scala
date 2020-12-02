@@ -5,15 +5,11 @@ import com.gatis.bootcamp.project.zole.Suit.Diamonds
 import com.gatis.bootcamp.project.zole.Rank._
 
 final case class Card(rank: Rank, suit: Suit) extends Ordered[Card] {
+  import Card._
 
   override def compare(that: Card): Int =
     if (this.isTrump) {
-      if (that.isTrump) // both trump
-        if (this.rank == that.rank) { // both either queens or jacks, so suit ordering determines strength
-          this.suit.queenAndJackSuitStrength - that.suit.queenAndJackSuitStrength
-        } else this.rank.strength - that.rank.strength
-      else // other is non-trump
-        1
+      compareTrumpToOtherCard(this, that)
     } else {
       if (that.isTrump) // this is non-trump, other trump
         -1
@@ -29,6 +25,31 @@ final case class Card(rank: Rank, suit: Suit) extends Ordered[Card] {
 }
 
 object Card {
+
+  private def compareTrumpToOtherCard(trump: Card, other: Card) =
+    if (other.isTrump) // both trump
+      if (trump.rank == other.rank) { // both either queens or jacks, so suit ordering determines strength
+        trump.suit.queenAndJackSuitStrength - other.suit.queenAndJackSuitStrength
+      } else trump.rank.strength - other.rank.strength
+    else // other is non-trump
+      1
+
+  //only for pretty ordering in hand, keeping same suit cards together
+  object InHandPrettyOrdering extends Ordering[Card] {
+    override def compare(one: Card, other: Card): Int =
+      if (one.isTrump) {
+        compareTrumpToOtherCard(one, other)
+      } else {
+        if (other.isTrump) // this is non-trump, other trump
+          -1
+        else { // both non-trump
+          if (one.suit == other.suit) { // non-trump cards of same rank don't have strength ordering
+            one.rank.strength - other.rank.strength
+          } else one.suit.queenAndJackSuitStrength - other.suit.queenAndJackSuitStrength
+        }
+      }
+  }
+
   def of(x: String): Either[ErrorMessage, Card] = x.toList match {
     case r :: s :: Nil =>
       for {
