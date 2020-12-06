@@ -12,7 +12,7 @@ object ExpiringCache {
   trait Cache[F[_], K, V] {
     def get(key: K): F[Option[V]]
 
-    def put(key: K, value: V): F[Unit]
+    def put(key: K, value: V): F[V]
   }
 
   class RefCache[F[_]: Clock: Monad, K, V](
@@ -24,10 +24,11 @@ object ExpiringCache {
       map <- state.get
     } yield map.get(key).map { case (_, value) => value }
 
-    def put(key: K, value: V): F[Unit] = for {
+    def put(key: K, value: V): F[V] = for {
       time <- Clock[F].realTime(MILLISECONDS)
       _ <- state.update(_.updated(key, (time, value)))
-    } yield ()
+    } yield value
+
   }
 
   object Cache {

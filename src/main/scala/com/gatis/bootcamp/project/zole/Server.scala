@@ -9,6 +9,8 @@ import scala.concurrent.duration._
 
 object ZoleHttpServer extends IOApp {
   override def run(args: List[String]): IO[ExitCode] = for {
+
+    // TODO choose duration that make sense
     cache <- Cache.of[IO, String, Table](10.minutes, 2.minutes)
     _ <- BlazeServerBuilder[IO](ExecutionContext.global)
       .bindHttp(port = 9001, host = "localhost")
