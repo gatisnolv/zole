@@ -22,6 +22,7 @@ final case class Card(rank: Rank, suit: Suit) extends Ordered[Card] {
 
   override def toString: String = s"$rank$suit"
   def isTrump = rank == Queen || rank == Jack || suit == Diamonds
+  val points = rank.points
 }
 
 object Card {

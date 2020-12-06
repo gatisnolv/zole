@@ -22,7 +22,6 @@ object Suit {
 
   val ordered: List[Suit] = Diamonds :: Hearts :: Spades :: Clubs :: Nil
 
-  //not sure if this will be needed
   def of(x: Char): Either[ErrorMessage, Suit] = x match {
     case Clubs.character    => Clubs.asRight
     case Spades.character   => Spades.asRight

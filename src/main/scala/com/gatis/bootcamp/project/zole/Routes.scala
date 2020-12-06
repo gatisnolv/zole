@@ -8,6 +8,7 @@ import cats.syntax.all._
 import org.http4s.implicits._
 import scala.util.Random
 import java.util.UUID
+import com.gatis.bootcamp.project.cache.ExpiringCache.Cache
 
 case class CardR(rank: String, suit: String)
 
@@ -127,5 +128,7 @@ object Routes {
     }
   }
 
-  private[zole] val httpApp = { helloRoute <+> cardRoute <+> gameRoutes }.orNotFound
+  private[zole] def httpApp(tables: Cache[IO, String, Table]) = {
+    helloRoute <+> cardRoute <+> gameRoutes
+  }.orNotFound
 }
