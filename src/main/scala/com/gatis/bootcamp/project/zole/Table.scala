@@ -3,84 +3,116 @@ package com.gatis.bootcamp.project.zole
 import scala.util.Random
 import com.gatis.bootcamp.project.zole.Rank._
 import com.gatis.bootcamp.project.zole.Suit._
-import cats.implicits._
+// import cats.implicits._
+import cats.syntax.either._
+import cats.syntax.option._
 
-case class TableCards(card1: Card, card2: Card)
+case class TableCards(cards: Set[Card])
+object TableCards {
+  def of(cards: Set[Card]): Either[ErrorMessage, TableCards] =
+    if (cards.size != 2) s"There should be exactly two table cards, got ${cards.size}".asLeft
+    else TableCards(cards).asRight
+}
 
 //stiķis
 case class Trick(card1: Card, card2: Card, card3: Card) {
-  def cardList = card1 :: card2 :: card3 :: Nil
+  private def cardList = card1 :: card2 :: card3 :: Nil
+  def toSet = cardList.toSet
   def containTrump = cardList.exists(_.isTrump)
   def points = cardList.foldLeft(0)((acc, card) => acc + card.points)
-}
 
-// spēles veids
-sealed abstract class Game private (val shortName: String)
-
-object Game {
-  // lielais
-  case object Big extends Game("B")
-  // zole
-  case object Zole extends Game("Z")
-  // mazā zole
-  case object SmallZole extends Game("S")
-  // galdiņš
-  case object TheTable extends Game("T")
-
-  def of(game: String): Either[ErrorMessage, Game] = game match {
-    case Big.shortName       => Big.asRight
-    case Zole.shortName      => Zole.asRight
-    case SmallZole.shortName => SmallZole.asRight
-    case TheTable.shortName  => TheTable.asRight
-    case _                   => s"Invalid value for game type: $game".asLeft
+  //noteikt stiķa uzvarētāju
+  def decideTrickWinner: Card = {
+    if (containTrump) cardList.max
+    //for non-trump cards, the round is decided by the strongest card of demanded suit
+    else cardList.filter(_.suit == card1.suit).max
   }
 }
 
+// spēles veids
+sealed trait GameType
+// spēlētāja izvēle
+sealed abstract class GameChoice private (val shortName: String)
+
+object GameChoice {
+  // lielais = pacelt galda kārtis
+  case object Big extends GameChoice("B") with GameType
+  // zole
+  case object Zole extends GameChoice("Z") with GameType
+  // mazā zole
+  case object SmallZole extends GameChoice("S") with GameType
+  // garām
+  case object Pass extends GameChoice("P")
+  // galdiņš
+  case object TheTable extends GameType
+
+  def getGameType(choice: String, playersPassed: Int): Either[ErrorMessage, Option[GameType]] =
+    choice match {
+      case Big.shortName       => Big.some.asRight
+      case Zole.shortName      => Zole.some.asRight
+      case SmallZole.shortName => SmallZole.some.asRight
+      // 3 passes means galdiņš
+      case Pass.shortName => (if (playersPassed < 2) None else TheTable.some).asRight
+      case _              => s"Invalid value for game choice: $choice".asLeft
+    }
+}
+
 //roundPoints - acis (partijas punkti), score - spēles punkti
-case class Player private (
-  name: String,
-  id: String,
-  cards: Set[Card],
-  cardPlayed: Option[Card],
-  roundPoints: Int,
-  score: Int,
-  trickCount: Option[Int]
-) {
-  def updateScore(points: Int) = this.copy(score = score + points)
+case class Player private (name: String, id: String, score: Int) {
+  def updateScore(points: Int) = copy(score = score + points)
   // def increaseTrickCount = ??? // priekš "galdiņa" spēles
 }
 
 object Player {
-  def of(name: String, id: String) = Player(name, id, Set.empty, None, 0, 0, None)
+  def of(name: String, id: String) = Player(name, id, 0)
 }
 
 // remember to change playsSolo (lielais) role between rounds
-// whoseTurn - kam jāliek kārts
+// turn - kam jāliek kārts
 case class Round private (
-  game: Game,
+  game: Option[GameType],
   playsSolo: Option[Player],
-  tricks: List[Trick],
-  whoseTurn: Player,
+  playersCards: Map[Player, Set[Card]],
+  //tracks tricks and the respective winner
+  tricks: List[(Trick, Player)],
+  currentTrick: Set[Card],
+  turn: Player,
   // to track how many passed (garām), because The Table starts once every player passes, so we don't loop more than once
+  turnToMakeGameChoice: Player,
   playersPassed: Int,
   tableCards: TableCards
-  // whoseTurnToChooseGameType - not sure if needed yet
 ) {
-  def lastTrick = tricks.headOption
 
-  // maybe with this also store points/tricks for the players
-  def saveTrick(trick: Trick) = this.copy(tricks = trick :: tricks)
+  // the last trick is the last complete trick if new one has not yet started or the cards forming the new one
+  def lastTrick =
+    if (currentTrick.nonEmpty) currentTrick.some
+    else
+      tricks match {
+        case Nil          => None
+        case (t, _) :: ts => t.toSet.some
+      }
 
-  //norakt kārtis
-  def stashCards(cards: TableCards) = this.copy(tableCards = cards)
+  // likely to be replaced by playCard. maybe with this also store points/tricks for the players
+  def saveTrick(trick: Trick) = ??? // copy(tricks = trick :: tricks)
 
-  def setSolo(player: Player) = this.copy(playsSolo = Some(player))
+  def stashCards(cards: TableCards) = copy(tableCards = cards)
+
+  def setSolo(player: Player) = copy(playsSolo = Some(player))
+
+  def pass(next: Player) = copy(turnToMakeGameChoice = next, playersPassed = playersPassed + 1)
+
+  def setGameType(game: GameType) = copy(game = Some(game))
+
+  // TODO should also set up for next trick, inform of the trick winner
+  def playCard(next: Player, card: Card) = copy(currentTrick = currentTrick + card)
 
 }
 
 object Round {
-  def of(game: Game, playsSolo: Option[Player], first: Player, tableCards: TableCards) =
-    Round(game, playsSolo, Nil, first, 0, tableCards)
+  def start(first: Player, playersCards: Map[Player, Set[Card]], tableCards: Set[Card]) =
+    // use smart constructors in for comprehensions for table cards, player round cards
+    ???
+  // Round(None, None, playersCards, Nil, Set.empty, first, first, 0, tableCards)
 }
 
 // first - kam pirmā roka, rotē pēc partijas (round)
@@ -100,13 +132,15 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
       if (hasPlayerNamed(name))
         s"There is already someone at the table with name $name, please use a different name.".asLeft
       else
-        this.copy(players = Player.of(name, id) :: players).asRight
+        copy(players = Player.of(name, id) :: players).asRight
     else "There are 3 players at this table already.".asLeft
+
+  def gameChoice(): Either[ErrorMessage, Table] = ???
 
   def firstRound = ??? // use newRound
 
   def newRound(
-    game: Game,
+    game: GameType,
     playsSolo: Option[Player],
     first: Player,
     tableCards: TableCards
@@ -115,17 +149,12 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
       s"3 players needed to play, there are now only ${players.length}.".asLeft
     else {
       val deal = Table.dealCards
-      if (deal.nonEmpty && deal.init.forall(_.size == 8) && deal.last.size == 2) {
+      //question is this 'sanity' check really needed here?
+      if (deal.nonEmpty && deal.init.forall(_.size == 8)) {
         // q about use of init, last with regards to exception throwing, I guess, could wrap with Try
-        val tableCards = deal.last.toList
-        val updatedPlayers = (players zip deal.init).map({ case (player, cards) =>
-          player.copy(cards = cards)
-        })
+        val playersCards = (players zip deal.init).toMap
         this
-          .copy(
-            players = updatedPlayers,
-            round = Some(Round.of(game, playsSolo, first, TableCards(tableCards(0), tableCards(1))))
-          )
+          .copy(round = Some(Round.start(first, playersCards, deal.last)))
           .asRight
       }
       // This should be a 5xx
@@ -143,13 +172,6 @@ object Table extends App {
   def empty = Table(Nil, None)
 
   def arrangeCardsInHand(cards: Set[Card]) = cards.toList.sorted(Card.InHandPrettyOrdering).reverse
-
-  //noteikt stiķa uzvarētāju
-  def decideTrickWinner(cards: Trick): Card = {
-    if (cards.containTrump) cards.cardList.max
-    //for non-trump cards, the round is decided by the strongest card of demanded suit
-    else cards.cardList.filter(_.suit == cards.card1.suit).max
-  }
 
   def allCards = {
     val eithers = for {
@@ -179,21 +201,14 @@ object Table extends App {
   def aceClubs = Card(Ace, Clubs)
   def sevenDiamonds = Card(Seven, Diamonds)
 
-  println(decideTrickWinner(Trick(queen(Clubs), queen(Diamonds), queen(Spades))))
-  println(decideTrickWinner(Trick(queen(Spades), queen(Diamonds), queen(Clubs))))
-  println(decideTrickWinner(Trick(nineHearts, tenHearts, aceClubs)))
-  println(decideTrickWinner(Trick(nineHearts, tenHearts, sevenDiamonds)))
+  println((Trick(queen(Clubs), queen(Diamonds), queen(Spades))).decideTrickWinner)
+  println((Trick(queen(Spades), queen(Diamonds), queen(Clubs))).decideTrickWinner)
+  println((Trick(nineHearts, tenHearts, aceClubs)).decideTrickWinner)
+  println((Trick(nineHearts, tenHearts, sevenDiamonds)).decideTrickWinner)
 
   println(Trick(nineHearts, tenHearts, aceClubs).points)
 
-  val testTable = Table(
-    List(
-      Player("a", "1", Set.empty, None, 0, 0, None),
-      Player("b", "2", Set.empty, None, 0, 0, None),
-      Player("c", "3", Set.empty, None, 0, 0, None)
-    ),
-    None
-  )
+  val testTable = Table(List(Player.of("a", "1"), Player.of("b", "2"), Player.of("c", "3")), None)
   val firstPlayer = testTable.players(0)
   println(testTable.next(firstPlayer))
 
