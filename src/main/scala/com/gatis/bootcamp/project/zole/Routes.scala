@@ -61,7 +61,7 @@ object Routes {
 
     def makeChoice(table: Table, id: String, choice: String, code: String): IO[Table] = for {
       // TODO continue here
-      table <- updateTable(table.gameChoice(), code)
+      table <- updateTable(table.makeGameChoice(id, choice), code)
     } yield table
 
     val helloRoute = {

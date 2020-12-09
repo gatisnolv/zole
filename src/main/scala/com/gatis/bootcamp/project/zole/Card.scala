@@ -51,6 +51,22 @@ object Card {
       }
   }
 
+  def allCards = {
+    val eithers = for {
+      suit <- Suit.ordered
+      rank <- Rank.ordered
+      // } yield Card.of(rank.toString + suit.toString)
+      // for easier visual checking, when suits toString defined as emoji
+    } yield Card.of(rank.toString + suit.character.toString)
+
+    eithers.foldLeft(Set.empty[Card])((acc, el) =>
+      el match {
+        case Right(card) => acc + card
+        case Left(_)     => acc
+      }
+    )
+  }
+
   def of(x: String): Either[ErrorMessage, Card] = x.toList match {
     case r :: s :: Nil =>
       for {
