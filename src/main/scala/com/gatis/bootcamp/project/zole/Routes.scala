@@ -1,6 +1,5 @@
 package com.gatis.bootcamp.project.zole
 
-// import cats.effect.{Blocker, IO}
 import cats.effect.{IO}
 import org.http4s.dsl.io._
 import org.http4s._
@@ -13,9 +12,6 @@ import com.gatis.bootcamp.project.cache.ExpiringCache.Cache
 case class CardR(rank: String, suit: String)
 
 case class Registration(code: String, name: String)
-
-// think about naming
-case class Choice(choice: String)
 
 object Routes {
 
@@ -49,20 +45,24 @@ object Routes {
       )(IO.pure(_))
     } yield table
 
+    implicit class ValueExtractor[T](either: Either[ErrorMessage, T]) {
+      def io = either.fold(e => IO.raiseError(new Exception(e)): IO[T], IO.pure(_))
+    }
+
     def updateTable(eitherTable: Either[ErrorMessage, Table], code: String) =
       eitherTable.fold(m => IO.raiseError(new Exception(m)), tables.put(code, _))
 
-    def seatPlayer(table: Table, name: String, id: String, code: String) = for {
-      table <- updateTable(table.seatPlayer(name, id), code)
-    } yield table
+    def seatPlayer(table: Table, id: String, name: String, code: String) =
+      updateTable(table.seatPlayer(name, id), code)
+
+    def makeChoice(table: Table, id: String, choice: String, code: String): IO[Table] =
+      updateTable(table.makeGameChoice(id, choice), code)
+
+    def playCard(table: Table, id: String, card: String, code: String): IO[Table] =
+      updateTable(table.playCard(id, card), code)
 
     def handleErrors(response: IO[Response[IO]]) =
       response.handleErrorWith(e => BadRequest(e.getMessage()))
-
-    def makeChoice(table: Table, id: String, choice: String, code: String): IO[Table] = for {
-      // TODO continue here
-      table <- updateTable(table.makeGameChoice(id, choice), code)
-    } yield table
 
     val helloRoute = {
       HttpRoutes.of[IO] { case GET -> Root =>
@@ -74,7 +74,9 @@ object Routes {
       import io.circe.generic.auto._
       import io.circe.syntax._
       import org.http4s.circe.CirceEntityCodec._
+
       HttpRoutes.of[IO] {
+
         case POST -> Root / "new" => // could combine with functionality to register the invoker (of course need to privde name in req), include uuid in response
           for {
             code <- getNewGameCode
@@ -91,87 +93,96 @@ object Routes {
             table <- getTable(code)
             id <- IO(UUID.randomUUID().toString())
             table <- seatPlayer(table, id, name, code)
-            response <- {
+            text <- {
               val playersNeeded = table.playersNeeded
-              val text = s"Hello, $name, you are registered ${if (playersNeeded > 0)
-                s", waiting for ${playersNeeded} more player(s)."
-              else
-                // .last can throw if the list is empty, but is that a problem for this?
-                s". The game can begin. It's ${table.players.last.name}'s turn to choose a game type."}"
-              //could already deal (hand out) cards, though not suitable for black zole, so rather use separate getCards endpoint after all register
-              Ok(text).map(_.addCookie("uuid", id).addCookie("code", code))
+              val infoIO =
+                if (playersNeeded > 0)
+                  IO.pure(s" , waiting for ${playersNeeded} more player(s).")
+                else
+                  table.whoseTurn.io.map(player =>
+                    s". The game can begin. It's ${player.name}'s turn to make a game choice."
+                  )
+              infoIO.map(info => s"Hello, $name, you are registered$info")
             }
+            response <- Ok(text).map(_.addCookie("uuid", id).addCookie("code", code))
           } yield response)
-        //add handling for nonexistent table with 4xx - for most requests, since they rely on getCookie
 
         case req @ POST -> Root / "choice" / choice =>
           handleErrors(for {
-            choice <- req.as[Choice]
             id <- getCookie(req, "uuid")
             code <- getCookie(req, "code")
             table <- getTable(code)
-            table <- makeChoice(table, id, choice.choice, code)
-            // TODO continue from here
-            shouldChoose = true
-            whoseTurn = "John"
-            response <- Ok(
-              if (shouldChoose) s"You chose ${choice}, it's now $whoseTurn's turn."
-              else s"It's not your turn to make a game choice, it's $whoseTurn's."
-            )
+            table <- makeChoice(table, id, choice, code)
+            gameType <- table.getGameType.io
+            text <- gameType match {
+              case None =>
+                table.whoMakesGameChoice.io.map(next =>
+                  s"You passed, it's now ${next.name}'s turn to decide."
+                )
+              case Some(game) =>
+                val soloInfoIO = if (table.roundHasSoloPlayer) for {
+                  solo <- table.getSoloPlayer.io
+                  opponents <- table.getSoloPlayersOpponents.io
+                } yield s" ${solo.name} will play solo against ${opponents.map(_.name).mkString(" and ")}."
+                else IO.pure("")
+                for {
+                  info <- soloInfoIO
+                  whoseTurn <- table.whoseTurn.io
+                } yield s"The game type will be $game.$info It's now ${whoseTurn.name}'s turn to play a card."
+            }
+            response <- Ok(text)
           } yield response)
 
-        case req @ POST -> Root / "getCards" => { ??? }
-
-        //following registration next requests can be identified with uuid, table code
-        case req @ GET -> Root / "whoseTurn" => // would be nice to use for both turn as well as turn to make a choice how to play
-          (for {
+        //whose turn either to place a card or to make a game choice
+        case req @ GET -> Root / "turn" =>
+          handleErrors(for {
             id <- getCookie(req, "uuid")
-            name = "John"
-            tableReady = true
-            shouldChoose = true
-            playersNeeded = 2
-            response <- Ok(
-              if (tableReady)
-                if (shouldChoose)
-                  "It's your turn to make a choice how to play"
-                else
-                  s"It's $name's turn"
-              else s"Still waiting for ${playersNeeded} player${if (playersNeeded > 1) "s"} to join"
-            )
-          } yield response).handleErrorWith(e => BadRequest(e.getMessage()))
+            code <- getCookie(req, "code")
+            table <- getTable(code)
+            gameType <- table.getGameType.io
+            whoNeedsToAct <-
+              if (gameType.isEmpty) table.whoMakesGameChoice.io else table.whoseTurn.io
+            text = "It's " + (if (whoNeedsToAct.id == id) "your"
+                              else
+                                whoNeedsToAct.name + "'s") + " turn to " + (if (gameType.isEmpty)
+                                                                              "make a game choice"
+                                                                            else
+                                                                              "play a card") + "."
+            response <- Ok(text)
+          } yield response)
 
-        case req @ POST -> Root / "pickUpCards" =>
-          (for {
-            // could define specific exceptions
+        // play a card
+        case req @ POST -> Root / "turn" / card =>
+          handleErrors(for {
             id <- getCookie(req, "uuid")
-            tableReady = true
-            name = "John"
-            response <- Ok(
-              if (tableReady)
-                //mark cards as picked up for player
-                s"Your cards are in the body JSON, it is $name's turn"
-              else
-                s"Waiting for more players to join the table"
-            ) // add cards to body if table ready
-          } yield response).handleErrorWith(e => BadRequest(e.getMessage()))
+            code <- getCookie(req, "code")
+            table <- getTable(code)
+            table <- playCard(table, id, card, code)
+            // continue here
+            response <- Ok()
+          } yield response)
 
+        // look at cards of the current trick
+        case req @ GET -> Root / "currentTrick" =>
+          handleErrors(for {
+            id <- getCookie(req, "uuid")
+            code <- getCookie(req, "code")
+            table <- getTable(code)
+            // continue here
+            response <- Ok()
+          } yield response)
+
+        case req @ GET -> Root / "getHandCards" =>
+          handleErrors(for {
+            id <- getCookie(req, "uuid")
+            code <- getCookie(req, "code")
+            table <- getTable(code)
+            cards <- table.getPlayersCards(id).io
+            response <- Ok(cards.mkString(", "))
+          } yield response)
       }
     }
 
-    //experiment
-    val cardRoute = {
-      import io.circe.generic.auto._
-      import io.circe.syntax._
-      import org.http4s.circe.CirceEntityCodec._
-      HttpRoutes.of[IO] { case req @ POST -> Root / "card" =>
-        for {
-          card <- req.as[CardR]
-          inpuCard = Card.of(card.rank + card.suit)
-          response <- Ok(inpuCard.fold(e => e, c => c).toString)
-        } yield response
-      }
-    }
-
-    helloRoute <+> cardRoute <+> gameRoutes
+    helloRoute <+> gameRoutes
   }.orNotFound
 }

@@ -9,6 +9,7 @@ import com.gatis.bootcamp.project.zole.Card._
 import cats.syntax.either._
 import cats.syntax.option._
 import com.gatis.bootcamp.project.zole.GameChoice._
+import cats.data.Op
 
 case class TableCards(cards: Set[Card])
 object TableCards {
@@ -123,13 +124,17 @@ case class Round private (
 }
 
 object Round {
-  def start(first: Player, playersCards: Map[Player, Set[Card]], tableCards: Set[Card]): Round =
-    // use smart constructors in for comprehensions for table cards, player round cards
-    ???
-  // Round(None, None, playersCards, Nil, Set.empty, first, first, 0, tableCards)
+  def start(
+    first: Player,
+    playersCards: Map[Player, Set[Card]],
+    tableCards: Set[Card]
+  ): Either[ErrorMessage, Round] = for {
+    tableCards <- TableCards.of(tableCards)
+  } yield Round(None, None, playersCards, Nil, Set.empty, first, first, first, 0, tableCards)
+  // use smart constructors in for comprehensions for table cards, player round cards
+
 }
 
-// first - kam pirmā roka, rotē pēc partijas (round)
 case class Table private (val players: List[Player], val round: Option[Round]) {
   def next(player: Player) = players match {
     case Nil => "There are no players at the table".asLeft
@@ -143,6 +148,42 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
     .find(_.id == id)
     .fold(s"Player with id $id is not sitting at this table.".asLeft[Player])(_.asRight)
 
+  def getRound: Either[ErrorMessage, Round] =
+    round.fold(s"Need $playersNeeded more players to start playing.".asLeft[Round])(_.asRight)
+
+  def whoseTurn: Either[ErrorMessage, Player] = getRound.map(_.turn)
+
+  def getGameType: Either[ErrorMessage, Option[GameType]] = getRound.map(_.game)
+
+  def whoMakesGameChoice: Either[ErrorMessage, Player] = getRound.map(_.makesGameChoice)
+
+  def roundHasSoloPlayer: Boolean = getSoloPlayer.isRight
+
+  def getPlayersCards(id: String): Either[ErrorMessage, List[Card]] = for {
+    round <- getRound
+    player <- getPlayerWithId(id)
+    cards <- round.playersCards
+      .get(player)
+      .fold(s"Unexpected error: ${player.name}'s cards not found".asLeft[Set[Card]])(_.asRight)
+  } yield Table.arrangeCardsInHand(cards)
+
+  def getSoloPlayer: Either[ErrorMessage, Player] = for {
+    round <- getRound
+    gameType <- getGameType
+    solo <- gameType match {
+      case None =>
+        "The game type is not yet set, it is yet to be determined if and who will play solo.".asLeft
+      case Some(game) =>
+        round.playsSolo match {
+          case None         => s"The game type $game does not have a solo player.".asLeft
+          case Some(player) => player.asRight
+        }
+    }
+  } yield solo
+
+  def getSoloPlayersOpponents: Either[ErrorMessage, List[Player]] =
+    getSoloPlayer.map(solo => players.filterNot(_ == solo))
+
   def playersNeeded = 3 - players.length
 
   def seatPlayer(name: String, id: String): Either[ErrorMessage, Table] =
@@ -152,7 +193,7 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
       else {
         // a choice to have the first seated be the starting player, so appending here
         val newTable = copy(players = players :+ Player.of(name, id))
-        if (players.length < 3) newTable.asRight else newTable.firstRound
+        if (newTable.players.length < 3) newTable.asRight else newTable.firstRound
       }
     else "There are 3 players at this table already.".asLeft
 
@@ -171,18 +212,29 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
 
     for {
       player <- getPlayerWithId(id)
-      table <- round.fold(s"Need $playersNeeded more players to start playing.".asLeft[Table])(round =>
-        round.game.fold(
-          if (round.makesGameChoice == player)
-            pickGameTypeOrPass(choice, round, player)
-          else
-            s"It's not your turn to make a game choice, it's ${round.makesGameChoice}'s turn.".asLeft
-        )(game =>
-          s"This rounds game type has already been determined as $game by ${round.makesGameChoice}.".asLeft
-        )
+      round <- getRound
+      table <- round.game.fold(
+        if (round.makesGameChoice == player)
+          pickGameTypeOrPass(choice, round, player)
+        else
+          s"It's not your turn to make a game choice, it's ${round.makesGameChoice.name}'s turn.".asLeft
+      )(game =>
+        s"This rounds game type has already been determined as $game by ${round.makesGameChoice.name}.".asLeft
       )
     } yield table
   }
+
+  def playCard(id: String, card: String): Either[ErrorMessage, Table] = for {
+    player <- getPlayerWithId(id)
+    round <- getRound
+    card <- Card.of(card)
+    table <-
+      if (round.turn == player)
+        // continue here
+        ???
+      else
+        s"It's not your turn to play a card, it's ${round.makesGameChoice.name}'s turn.".asLeft
+  } yield table
 
   def firstRound = newRound(players(0))
 
@@ -201,10 +253,10 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
       if (deal.nonEmpty && deal.init.forall(_.size == 8)) {
         // q about use of init, last with regards to exception throwing, I guess, could wrap with Try
         val playersCards = (players zip deal.init).toMap
-        copy(round = Round.start(first, playersCards, deal.last).some).asRight
+        Round.start(first, playersCards, deal.last).map(round => copy(round = round.some))
       }
       // This should be a 5xx
-      else "Unexpected error dealing cards".asLeft
+      else "Unexpected error: dealing cards".asLeft
 
     }
 }
