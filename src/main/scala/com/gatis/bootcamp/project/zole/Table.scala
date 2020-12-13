@@ -106,16 +106,16 @@ case class Round private (
   // likely to be replaced by playCard. maybe with this also store points/tricks for the players
   def saveTrick(trick: Trick) = ??? // copy(tricks = trick :: tricks)
 
-  def stashCards(cards: TableCards) = copy(tableCards = cards).some
+  def stashCards(cards: TableCards) = copy(tableCards = cards)
 
-  def setSolo(player: Player) = copy(playsSolo = Some(player)).some
+  def setSolo(player: Player) = copy(playsSolo = Some(player))
 
-  def pass(next: Player) = copy(makesGameChoice = next, playersPassed = playersPassed + 1).some
+  def pass(next: Player) = copy(makesGameChoice = next, playersPassed = playersPassed + 1)
 
-  def setGameType(game: GameType) = copy(game = Some(game)).some
+  def setGameType(game: GameType) = copy(game = Some(game))
 
   // TODO should also set up for next trick, inform of the trick winner
-  def playCard(next: Player, card: Card) = copy(currentTrick = currentTrick + card).some
+  def playCard(next: Player, card: Card) = copy(currentTrick = currentTrick + card)
 
   // TODO maybe like this, so at the end of a round players can review the tricks
   // def nextRound=
@@ -139,6 +139,10 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
 
   def hasPlayerNamed(name: String) = players.exists(_.name == name)
 
+  def getPlayerWithId(id: String): Either[ErrorMessage, Player] = players
+    .find(_.id == id)
+    .fold(s"Player with id $id is not sitting at this table.".asLeft[Player])(_.asRight)
+
   def playersNeeded = 3 - players.length
 
   def seatPlayer(name: String, id: String): Either[ErrorMessage, Table] =
@@ -148,8 +152,7 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
       else {
         // a choice to have the first seated be the starting player, so appending here
         val newTable = copy(players = players :+ Player.of(name, id))
-        (if (players.length < 3) newTable else newTable.firstRound).asRight
-        newTable.asRight
+        if (players.length < 3) newTable.asRight else newTable.firstRound
       }
     else "There are 3 players at this table already.".asLeft
 
@@ -157,32 +160,28 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
 
     def pickGameTypeOrPass(choice: String, round: Round, player: Player) = for {
       gameType <- GameChoice.getGameType(choice, round.playersPassed)
-      newTable <- gameType.fold(
-        next(player).flatMap(next => copy(round = round.pass(next)).asRight)
-      )(gameType => {
+      next <- next(player)
+      newRound = gameType.fold(round.pass(next))(gameType => {
         val roundWithGameType = round.setGameType(gameType)
-        (if (gameType == TheTable) copy(round = roundWithGameType)
-         else copy(round = roundWithGameType.flatMap(_.setSolo(player)))).asRight
+        if (gameType == TheTable) roundWithGameType
+        else roundWithGameType.setSolo(player)
       })
+      newTable <- copy(round = newRound.some).asRight
     } yield newTable
 
-    round match {
-      case Some(round) =>
-        round.game match {
-          case None =>
-            players.find(_.id == id) match {
-              case Some(player) =>
-                if (round.makesGameChoice == player)
-                  pickGameTypeOrPass(choice, round, player)
-                else
-                  s"It's not your turn to make a game choice, it's ${round.makesGameChoice}'s turn.".asLeft
-              case None => s"Player with id $id is not sitting at this table.".asLeft
-            }
-          case Some(game) =>
-            s"This rounds game type has already been determined as ${game} by ${round.makesGameChoice}.".asLeft
-        }
-      case None => s"Need ${3 - players.length} more players to start playing.".asLeft
-    }
+    for {
+      player <- getPlayerWithId(id)
+      table <- round.fold(s"Need $playersNeeded more players to start playing.".asLeft[Table])(round =>
+        round.game.fold(
+          if (round.makesGameChoice == player)
+            pickGameTypeOrPass(choice, round, player)
+          else
+            s"It's not your turn to make a game choice, it's ${round.makesGameChoice}'s turn.".asLeft
+        )(game =>
+          s"This rounds game type has already been determined as $game by ${round.makesGameChoice}.".asLeft
+        )
+      )
+    } yield table
   }
 
   def firstRound = newRound(players(0))
