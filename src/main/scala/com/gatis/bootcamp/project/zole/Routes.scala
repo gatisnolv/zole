@@ -61,6 +61,9 @@ object Routes {
     def playCard(table: Table, id: String, card: String, code: String): IO[Table] =
       updateTable(table.playCard(id, card), code)
 
+    def stashCards(table: Table, id: String, cards: String, code: String): IO[Table] =
+      updateTable(table.stashCards(id, cards), code)
+
     def handleErrors(response: IO[Response[IO]]) =
       response.handleErrorWith(e => BadRequest(e.getMessage()))
 
@@ -91,18 +94,21 @@ object Routes {
             reg <- req.as[Registration]
             val Registration(code, name) = reg
             table <- getTable(code)
-            id <- IO(UUID.randomUUID().toString())
+            // id <- IO(UUID.randomUUID().toString())
+            id <- IO(Random.between(0, 1000).toString()) // for ease while developing
             table <- seatPlayer(table, id, name, code)
             text <- {
               val playersNeeded = table.playersNeeded
+
+              // This logic could be moved to Table to return this info
               val infoIO =
                 if (playersNeeded > 0)
-                  IO.pure(s" , waiting for ${playersNeeded} more player(s).")
+                  IO.pure(s". Waiting for ${playersNeeded} more player(s).")
                 else
                   table.whoseTurn.io.map(player =>
                     s". The game can begin. It's ${player.name}'s turn to make a game choice."
                   )
-              infoIO.map(info => s"Hello, $name, you are registered$info")
+              infoIO.map(info => s"Hello, $name, you are registered.$info")
             }
             response <- Ok(text).map(_.addCookie("uuid", id).addCookie("code", code))
           } yield response)
@@ -113,22 +119,23 @@ object Routes {
             code <- getCookie(req, "code")
             table <- getTable(code)
             table <- makeChoice(table, id, choice, code)
-            gameType <- table.getGameType.io
-            text <- gameType match {
+            game <- table.getGame.io
+            text <- game match {
               case None =>
                 table.whoMakesGameChoice.io.map(next =>
                   s"You passed, it's now ${next.name}'s turn to decide."
                 )
-              case Some(game) =>
+              case Some(gameType) =>
+                // this logic could be moved to Table to return such info
                 val soloInfoIO = if (table.roundHasSoloPlayer) for {
-                  solo <- table.getSoloPlayer.io
+                  solo <- table.soloPlayer.io
                   opponents <- table.getSoloPlayersOpponents.io
                 } yield s" ${solo.name} will play solo against ${opponents.map(_.name).mkString(" and ")}."
                 else IO.pure("")
                 for {
                   info <- soloInfoIO
                   whoseTurn <- table.whoseTurn.io
-                } yield s"The game type will be $game.$info It's now ${whoseTurn.name}'s turn to play a card."
+                } yield s"The game type will be $gameType.$info It's now ${whoseTurn.name}'s turn to play a card."
             }
             response <- Ok(text)
           } yield response)
@@ -139,15 +146,23 @@ object Routes {
             id <- getCookie(req, "uuid")
             code <- getCookie(req, "code")
             table <- getTable(code)
-            gameType <- table.getGameType.io
+            game <- table.getGame.io
+
+            // this  logic could be moved to Table to return a 'status' String
             whoNeedsToAct <-
-              if (gameType.isEmpty) table.whoMakesGameChoice.io else table.whoseTurn.io
+              if (game.isEmpty) table.whoMakesGameChoice.io
+              else if (table.soloNeedsToStash) table.soloPlayer.io
+              else table.whoseTurn.io
             text = "It's " + (if (whoNeedsToAct.id == id) "your"
                               else
-                                whoNeedsToAct.name + "'s") + " turn to " + (if (gameType.isEmpty)
+                                whoNeedsToAct.name + "'s") + " turn to " + (if (game.isEmpty)
                                                                               "make a game choice"
+                                                                            else if (
+                                                                              table.soloNeedsToStash
+                                                                            ) "stash two cards"
                                                                             else
-                                                                              "play a card") + "."
+                                                                              "play a card"
+                                                                                + ".")
             response <- Ok(text)
           } yield response)
 
@@ -162,7 +177,18 @@ object Routes {
             response <- Ok()
           } yield response)
 
-        // look at cards of the current trick
+        //stash cards
+        case req @ POST -> Root / "stash" / cards =>
+          handleErrors(for {
+            id <- getCookie(req, "uuid")
+            code <- getCookie(req, "code")
+            table <- getTable(code)
+            table <- stashCards(table, id, cards, code)
+            //continue here
+            response <- Ok()
+          } yield response)
+
+        // look at cards of the current trick, should include who played which card
         case req @ GET -> Root / "currentTrick" =>
           handleErrors(for {
             id <- getCookie(req, "uuid")

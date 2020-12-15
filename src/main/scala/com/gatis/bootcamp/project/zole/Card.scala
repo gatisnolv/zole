@@ -79,4 +79,7 @@ object Card {
       } yield result
     case _ => s"Failed to parse card $x".asLeft
   }
+
+  def multiple(x: String): Either[ErrorMessage, List[Card]] =
+    x.trim.split("\\s*,\\s*").toList.map(of(_)).sequence
 }
