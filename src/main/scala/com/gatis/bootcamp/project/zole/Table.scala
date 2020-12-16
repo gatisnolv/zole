@@ -83,7 +83,7 @@ case class Round private (
   game: Option[GameType],
   playsSolo: Option[Player],
   // could have Map[Player, (Set[Card], Boolean)] to designate whether picked up yet
-  playersCards: Map[Player, Set[Card]],
+  eachPlayersCards: Map[Player, Set[Card]],
   //tracks tricks, the respective taker
   tricks: List[(Trick, Player)],
   currentTrick: Set[Card],
@@ -110,21 +110,26 @@ case class Round private (
   // likely to be subsumed by playCard. maybe with this also store points/tricks for the players
   def saveTrick(trick: Trick) = ??? // copy(tricks = trick :: tricks)
 
-  def stashCards(cards: TableCards) = copy(tableCards = cards)
-
   def setSolo(player: Player) = copy(playsSolo = Some(player))
 
-  def takeTableCards(player: Player): Either[ErrorMessage, Round] = {
-    val soloCardsBeforeStashing = playersCards
-      .get(player)
-      .fold(s"Unexpected error: ${player.name}'s cards not found".asLeft[Set[Card]])(hand =>
-        (hand ++ tableCards.cards).asRight
-      )
-    soloCardsBeforeStashing.map(cards =>
-      setSolo(player)
-        .copy(tableCards = TableCards.empty, playersCards = playersCards.updated(player, cards))
+  def playersCards(player: Player) = eachPlayersCards
+    .get(player)
+    .fold(s"Unexpected error: ${player.name}'s cards not found".asLeft[Set[Card]])(_.asRight)
+
+  def stashCards(player: Player, stash: TableCards) = playersCards(player).map(cards =>
+    copy(
+      tableCards = stash,
+      eachPlayersCards = eachPlayersCards.updated(player, cards -- stash.cards)
     )
-  }
+  )
+
+  def takeTableCards(player: Player): Either[ErrorMessage, Round] = playersCards(player).map(
+    cards =>
+      setSolo(player).copy(
+        tableCards = TableCards.empty,
+        eachPlayersCards = eachPlayersCards.updated(player, cards ++ tableCards.cards)
+      )
+  )
 
   def pass(next: Player) = copy(makesGameChoice = next, playersPassed = playersPassed + 1)
 
@@ -176,12 +181,10 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
   def soloNeedsToStash: Boolean =
     getRound.map(round => round.game == Some(Big) && round.tableCards.notStashed).contains(true)
 
-  def getPlayersCards(id: String): Either[ErrorMessage, List[Card]] = for {
+  def playersCards(id: String): Either[ErrorMessage, List[Card]] = for {
     round <- getRound
     player <- getPlayerWithId(id)
-    cards <- round.playersCards
-      .get(player)
-      .fold(s"Unexpected error: ${player.name}'s cards not found".asLeft[Set[Card]])(_.asRight)
+    cards <- round.playersCards(player)
   } yield Table.arrangeCardsInHand(cards)
 
   def soloPlayer: Either[ErrorMessage, Player] = for {
@@ -189,7 +192,7 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
     game <- getGame
     solo <- game match {
       case None =>
-        "The game type is not yet set, it is yet to be determined if and who will play solo.".asLeft
+        "Game type has not been determined, it is yet to be determined if and who will play solo.".asLeft
       case Some(gameType) =>
         round.playsSolo match {
           case None         => s"The game type $gameType does not have a solo player.".asLeft
@@ -216,7 +219,7 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
 
   def makeGameChoice(id: String, choice: String): Either[ErrorMessage, Table] = {
 
-    def pickGameTypeOrPass(choice: String, round: Round, player: Player) = for {
+    def pickGameTypeOrPass(round: Round, player: Player) = for {
       gameType <- GameChoice.getGameType(choice, round.playersPassed)
       next <- next(player)
       newRound <- gameType.fold(round.pass(next).asRight[ErrorMessage])(gameType => {
@@ -235,7 +238,7 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
       round <- getRound
       table <- round.game.fold(
         if (round.makesGameChoice == player)
-          pickGameTypeOrPass(choice, round, player)
+          pickGameTypeOrPass(round, player)
         else
           s"It's not your turn to make a game choice, it's ${round.makesGameChoice.name}'s turn.".asLeft
       )(game =>
@@ -246,30 +249,51 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
 
   def playCard(id: String, card: String): Either[ErrorMessage, Table] = for {
     player <- getPlayerWithId(id)
-    round <- getRound
-    card <- Card.of(card)
+    turn <- whoseTurn
+    game <- getGame
+    choosesGameType <- whoMakesGameChoice
     table <-
-      if (round.turn == player)
-        // add checks that a turn can actually happen, e.g. account for Big needing to stash two cards before the game can continue
-        // continue here
-        ???
-      else
-        s"It's not your turn to play a card, it's ${round.makesGameChoice.name}'s turn.".asLeft
+      game.fold(
+        s"Game type has not been determined, it's ${choosesGameType.name}'s turn to make a game choice."
+          .asLeft[Table]
+      )(gameType =>
+        if (turn == player) {
+          // continue here
+          // add checks that a turn can actually happen, e.g. account for Big needing to stash two cards before the game can continue
+          for {
+            card <- Card.of(card)
+          } yield ???
+        } else
+          s"It's not your turn to play a card, it's ${turn.name}'s turn.".asLeft
+      )
   } yield table
 
   def stashCards(id: String, cards: String): Either[ErrorMessage, Table] = for {
     player <- getPlayerWithId(id)
     round <- getRound
-    cards <- Card.multiple(cards)
-    tableCards <- TableCards.of(cards.toSet)
-    solo <- soloPlayer
+    game <- getGame
+    solo <- soloPlayer.leftMap(_ + " Cards are not needed to be stashed now.")
+    playerIsSolo = player == solo
     table <-
       if (soloNeedsToStash)
-        if (solo == player)
-          ???
-        else s"You don't need to stash, ${solo.name} does.".asLeft
+        if (playerIsSolo) {
+          for {
+            cards <- Card.multiple(cards)
+            tableCards <- TableCards.of(cards.toSet)
+            newRound <- round.stashCards(player, tableCards)
+            table <- copy(round = newRound.some).asRight
+          } yield table
+        } else s"You don't need to stash, ${solo.name} does.".asLeft
       else
-        s"Cards are not needed to be stashed now.".asLeft
+        (game match {
+          case Some(gameType) =>
+            if (gameType == Big)
+              s"${if (playerIsSolo) "You have" else s"${solo.name} has"} already stashed."
+            else
+              s"Cards only need to be stashed, when the game type is Big, but it is $gameType."
+          case None =>
+            s"Game type has not been determined, cards are not needed to be stashed now."
+        }).asLeft
   } yield table
 
   def firstRound = newRound(players(0))

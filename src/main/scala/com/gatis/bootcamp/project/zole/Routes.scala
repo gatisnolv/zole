@@ -173,6 +173,7 @@ object Routes {
             code <- getCookie(req, "code")
             table <- getTable(code)
             table <- playCard(table, id, card, code)
+            //could return hand cards post playing the card
             // continue here
             response <- Ok()
           } yield response)
@@ -184,6 +185,7 @@ object Routes {
             code <- getCookie(req, "code")
             table <- getTable(code)
             table <- stashCards(table, id, cards, code)
+            //could return hand cards post stash
             //continue here
             response <- Ok()
           } yield response)
@@ -203,7 +205,7 @@ object Routes {
             id <- getCookie(req, "uuid")
             code <- getCookie(req, "code")
             table <- getTable(code)
-            cards <- table.getPlayersCards(id).io
+            cards <- table.playersCards(id).io
             response <- Ok(cards.mkString(", "))
           } yield response)
       }
