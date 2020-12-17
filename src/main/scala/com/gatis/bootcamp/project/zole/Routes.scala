@@ -1,6 +1,6 @@
 package com.gatis.bootcamp.project.zole
 
-import cats.effect.{IO}
+import cats.effect.IO
 import org.http4s.dsl.io._
 import org.http4s._
 import cats.syntax.all._
@@ -45,27 +45,19 @@ object Routes {
       )(IO.pure(_))
     } yield table
 
-    implicit class ValueExtractor[T](either: Either[ErrorMessage, T]) {
-      def io = either.fold(e => IO.raiseError(new Exception(e)): IO[T], IO.pure(_))
+    implicit class ValueExtractor[T](value: Either[ErrorMessage, T]) {
+      def io = value.fold(e => IO.raiseError(new Exception(e)): IO[T], IO.pure(_))
     }
 
-    def updateTable(eitherTable: Either[ErrorMessage, Table], code: String) =
-      eitherTable.fold(m => IO.raiseError(new Exception(m)), tables.put(code, _))
+    implicit class PersistenceProvider(table: Either[ErrorMessage, Table]) {
+      def save(code: String): IO[Table] =
+        table.fold(m => IO.raiseError(new Exception(m)), tables.put(code, _))
+    }
 
-    def seatPlayer(table: Table, id: String, name: String, code: String) =
-      updateTable(table.seatPlayer(name, id), code)
-
-    def makeChoice(table: Table, id: String, choice: String, code: String): IO[Table] =
-      updateTable(table.makeGameChoice(id, choice), code)
-
-    def playCard(table: Table, id: String, card: String, code: String): IO[Table] =
-      updateTable(table.playCard(id, card), code)
-
-    def stashCards(table: Table, id: String, cards: String, code: String): IO[Table] =
-      updateTable(table.stashCards(id, cards), code)
-
-    def handleErrors(response: IO[Response[IO]]) =
-      response.handleErrorWith(e => BadRequest(e.getMessage()))
+    implicit class ErrorHandler(response: IO[Response[IO]]) {
+      //could have different behaviour based on the message, i.e. 4xx, 5xx for unexpected errors
+      def handleErrors = response.handleErrorWith(e => BadRequest(e.getMessage()))
+    }
 
     val helloRoute = {
       HttpRoutes.of[IO] { case GET -> Root =>
@@ -82,7 +74,8 @@ object Routes {
 
         case POST -> Root / "new" => // could combine with functionality to register the invoker (of course need to privde name in req), include uuid in response
           for {
-            code <- getNewGameCode
+            // code <- getNewGameCode
+            code <- IO.pure("AAA") // for ease while developing
             text =
               s"Game table code: $code, proceed registering 3 players for the game, by sending " +
                 "POST requests to /register with JSON with fields code and name"
@@ -90,124 +83,102 @@ object Routes {
           } yield response
 
         case req @ POST -> Root / "register" =>
-          handleErrors(for {
+          (for {
             reg <- req.as[Registration]
             val Registration(code, name) = reg
             table <- getTable(code)
             // id <- IO(UUID.randomUUID().toString())
-            id <- IO(Random.between(0, 1000).toString()) // for ease while developing
-            table <- seatPlayer(table, id, name, code)
-            text <- {
-              val playersNeeded = table.playersNeeded
-
-              // This logic could be moved to Table to return this info
-              val infoIO =
-                if (playersNeeded > 0)
-                  IO.pure(s". Waiting for ${playersNeeded} more player(s).")
-                else
-                  table.whoseTurn.io.map(player =>
-                    s". The game can begin. It's ${player.name}'s turn to make a game choice."
-                  )
-              infoIO.map(info => s"Hello, $name, you are registered.$info")
-            }
+            id <- IO(
+              (table.players.foldLeft(0)((acc, el) => Math.max(acc, el.id.toInt)) + 1).toString
+            ) // for ease while developing
+            table <- table.seatPlayer(name, id).save(code)
+            playersNeeded = table.playersNeeded
+            info <- table.statusInfo(id).io
+            text = s"Hello, $name, you are registered. " +
+              (if (playersNeeded == 0) "The game can begin. " else "") + info
             response <- Ok(text).map(_.addCookie("uuid", id).addCookie("code", code))
-          } yield response)
+          } yield response).handleErrors
 
-        case req @ POST -> Root / "choice" / choice =>
-          handleErrors(for {
+        case req @ GET -> Root / "getHandCards" =>
+          (for {
             id <- getCookie(req, "uuid")
             code <- getCookie(req, "code")
             table <- getTable(code)
-            table <- makeChoice(table, id, choice, code)
+            cards <- table.playersCards(id).io
+            response <- Ok(cards.mkString(", "))
+          } yield response).handleErrors
+
+        case req @ POST -> Root / "choice" / choice =>
+          (for {
+            id <- getCookie(req, "uuid")
+            code <- getCookie(req, "code")
+            table <- getTable(code)
+            table <- table.makeGameChoice(id, choice).save(code)
             game <- table.getGame.io
             text <- game match {
               case None =>
                 table.whoMakesGameChoice.io.map(next =>
-                  s"You passed, it's now ${next.name}'s turn to decide."
+                  s"You passed, it's now $next's turn to decide."
                 )
               case Some(gameType) =>
                 // this logic could be moved to Table to return such info
                 val soloInfoIO = if (table.roundHasSoloPlayer) for {
                   solo <- table.soloPlayer.io
                   opponents <- table.getSoloPlayersOpponents.io
-                } yield s" ${solo.name} will play solo against ${opponents.map(_.name).mkString(" and ")}."
+                } yield s" $solo will play solo against ${opponents.map(_.name).mkString(" and ")}."
                 else IO.pure("")
                 for {
                   info <- soloInfoIO
                   whoseTurn <- table.whoseTurn.io
-                } yield s"The game type will be $gameType.$info It's now ${whoseTurn.name}'s turn to play a card."
+                } yield s"The game type will be $gameType.$info It's now $whoseTurn's turn to play a card."
             }
             response <- Ok(text)
-          } yield response)
+          } yield response).handleErrors
+
+        //stash cards
+        case req @ POST -> Root / "stash" / cards =>
+          (for {
+            id <- getCookie(req, "uuid")
+            code <- getCookie(req, "code")
+            table <- getTable(code)
+            table <- table.stashCards(id, cards).save(code)
+            cards <- table.playersCards(id).io
+            response <- Ok(cards.mkString(", "))
+          } yield response).handleErrors
+
+        // play a card
+        case req @ POST -> Root / "turn" / card =>
+          (for {
+            id <- getCookie(req, "uuid")
+            code <- getCookie(req, "code")
+            table <- getTable(code)
+            table <- table.playCard(id, card).save(code)
+            //could return hand cards post playing the card
+            // continue here
+            response <- Ok()
+          } yield response).handleErrors
 
         //whose turn either to place a card or to make a game choice
         case req @ GET -> Root / "turn" =>
-          handleErrors(for {
+          (for {
             id <- getCookie(req, "uuid")
             code <- getCookie(req, "code")
             table <- getTable(code)
             game <- table.getGame.io
-
-            // this  logic could be moved to Table to return a 'status' String
-            whoNeedsToAct <-
-              if (game.isEmpty) table.whoMakesGameChoice.io
-              else if (table.soloNeedsToStash) table.soloPlayer.io
-              else table.whoseTurn.io
-            text = "It's " + (if (whoNeedsToAct.id == id) "your"
-                              else
-                                whoNeedsToAct.name + "'s") + " turn to " + (if (game.isEmpty)
-                                                                              "make a game choice"
-                                                                            else if (
-                                                                              table.soloNeedsToStash
-                                                                            ) "stash two cards"
-                                                                            else
-                                                                              "play a card"
-                                                                                + ".")
-            response <- Ok(text)
-          } yield response)
-
-        // play a card
-        case req @ POST -> Root / "turn" / card =>
-          handleErrors(for {
-            id <- getCookie(req, "uuid")
-            code <- getCookie(req, "code")
-            table <- getTable(code)
-            table <- playCard(table, id, card, code)
-            //could return hand cards post playing the card
-            // continue here
-            response <- Ok()
-          } yield response)
-
-        //stash cards
-        case req @ POST -> Root / "stash" / cards =>
-          handleErrors(for {
-            id <- getCookie(req, "uuid")
-            code <- getCookie(req, "code")
-            table <- getTable(code)
-            table <- stashCards(table, id, cards, code)
-            //could return hand cards post stash
-            //continue here
-            response <- Ok()
-          } yield response)
+            info <- table.statusInfo(id).io
+            response <- Ok(info)
+          } yield response).handleErrors
 
         // look at cards of the current trick, should include who played which card
         case req @ GET -> Root / "currentTrick" =>
-          handleErrors(for {
+          (for {
             id <- getCookie(req, "uuid")
             code <- getCookie(req, "code")
             table <- getTable(code)
             // continue here
             response <- Ok()
-          } yield response)
+          } yield response).handleErrors
 
-        case req @ GET -> Root / "getHandCards" =>
-          handleErrors(for {
-            id <- getCookie(req, "uuid")
-            code <- getCookie(req, "code")
-            table <- getTable(code)
-            cards <- table.playersCards(id).io
-            response <- Ok(cards.mkString(", "))
-          } yield response)
       }
     }
 

@@ -2,7 +2,7 @@ package com.gatis.bootcamp.project.zole
 
 import cats.syntax.either._
 
-sealed abstract class Suit private (val character: Char) {
+sealed abstract class Suit private (val character: Char, val name: String) {
   import Suit._
   // override def toString: String = character.toString
   override def toString: String = this match {
@@ -15,10 +15,10 @@ sealed abstract class Suit private (val character: Char) {
 }
 
 object Suit {
-  case object Diamonds extends Suit('d')
-  case object Hearts extends Suit('h')
-  case object Spades extends Suit('s')
-  case object Clubs extends Suit('c')
+  case object Diamonds extends Suit('d', "diamonds")
+  case object Hearts extends Suit('h', "hearts")
+  case object Spades extends Suit('s', "spades")
+  case object Clubs extends Suit('c', "clubs")
 
   val ordered: List[Suit] = Diamonds :: Hearts :: Spades :: Clubs :: Nil
 

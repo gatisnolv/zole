@@ -8,7 +8,9 @@ import com.gatis.bootcamp.project.zole.Card._
 // import cats.syntax._
 import cats.syntax.either._
 import cats.syntax.option._
+import cats.syntax.traverse._
 import com.gatis.bootcamp.project.zole.GameChoice._
+import scala.collection.immutable.Nil
 
 case class TableCards private (cards: Set[Card]) {
   def notStashed = cards.isEmpty
@@ -71,7 +73,9 @@ object GameChoice {
 //roundPoints - acis (partijas punkti), score - spēles punkti
 case class Player private (name: String, id: String, score: Int) {
   def updateScore(points: Int) = copy(score = score + points)
-  // def increaseTrickCount = ??? // priekš "galdiņa" spēles
+
+  // override def toString = s"$name"
+  override def toString = s"$id-$name" // for ease while developing
 }
 
 object Player {
@@ -86,7 +90,8 @@ case class Round private (
   eachPlayersCards: Map[Player, Set[Card]],
   //tracks tricks, the respective taker
   tricks: List[(Trick, Player)],
-  currentTrick: Set[Card],
+  //beware of ordering
+  currentTrick: List[Card],
   // pirmā roka - stays constant for the round
   firstHand: Player,
   // kam jāliek kārts
@@ -110,11 +115,22 @@ case class Round private (
   // likely to be subsumed by playCard. maybe with this also store points/tricks for the players
   def saveTrick(trick: Trick) = ??? // copy(tricks = trick :: tricks)
 
+  def firstCardOfCurrentTrick = currentTrick.lastOption
+
+  def whoPlayedCardInCurrentTrick(card: Card): Either[ErrorMessage, Player] = eachPlayersCards
+    .find({ case (player, cards) => cards.contains(card) })
+    .map({ case (player, _) => player })
+    .toRight("This card was not played in the current trick")
+
+  def whoPlayedWhatInCurrentTrickInOrder = currentTrick.reverse
+    .map(card => whoPlayedCardInCurrentTrick(card).map((_, card)))
+    .sequence
+
   def setSolo(player: Player) = copy(playsSolo = Some(player))
 
   def playersCards(player: Player) = eachPlayersCards
     .get(player)
-    .fold(s"Unexpected error: ${player.name}'s cards not found".asLeft[Set[Card]])(_.asRight)
+    .fold(s"Unexpected error: $player's cards not found".asLeft[Set[Card]])(_.asRight)
 
   def stashCards(player: Player, stash: TableCards) = playersCards(player).map(cards =>
     copy(
@@ -136,7 +152,7 @@ case class Round private (
   def setGameType(game: GameType) = copy(game = Some(game))
 
   // TODO should also set up for next trick, inform of the trick winner
-  def playCard(next: Player, card: Card) = copy(currentTrick = currentTrick + card)
+  def playCard(next: Player, card: Card) = copy(currentTrick = card :: currentTrick)
 
   // TODO maybe like this, so at the end of a round players can review the tricks
   // def nextRound=
@@ -150,7 +166,7 @@ object Round {
     tableCards: Set[Card]
   ): Either[ErrorMessage, Round] = for {
     tableCards <- TableCards.of(tableCards)
-  } yield Round(None, None, playersCards, Nil, Set.empty, first, first, first, 0, tableCards)
+  } yield Round(None, None, playersCards, Nil, List.empty, first, first, first, 0, tableCards)
 
 }
 
@@ -174,6 +190,11 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
 
   def getGame: Either[ErrorMessage, Option[GameType]] = getRound.map(_.game)
 
+  def firstCardOfCurrentTrick = getRound.map(_.firstCardOfCurrentTrick)
+
+  def whoPlayedWhatInCurrentTrickInOrder = getRound.flatMap(_.whoPlayedWhatInCurrentTrickInOrder)
+
+  //modify to check for game type being set and include errormessage with that
   def whoMakesGameChoice: Either[ErrorMessage, Player] = getRound.map(_.makesGameChoice)
 
   def roundHasSoloPlayer: Boolean = soloPlayer.isRight
@@ -205,6 +226,55 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
     soloPlayer.map(solo => players.filterNot(_ == solo))
 
   def playersNeeded = 3 - players.length
+
+  // bring soloInfo over to this
+  def statusInfo(id: String) = {
+
+    def actionInfo(playerNeedsToAct: Boolean, whoNeedsToAct: Player, game: Option[GameType]) =
+      s"It's ${if (playerNeedsToAct) "your" else s"$whoNeedsToAct's"} turn to " +
+        // add info about who has already passed
+        game.fold("make a game choice")(_ =>
+          if (soloNeedsToStash) "stash two cards" else "play a card"
+        ) + ". "
+
+    def currentTrickInfo(
+      gameTypeDetermined: Boolean,
+      playerNeedsToAct: Boolean,
+      playedCards: List[(Player, Card)]
+    ) =
+      if (gameTypeDetermined) {
+        val addressOfPlayer = if (playerNeedsToAct) "You" else "They"
+        addressOfPlayer + (playedCards match {
+          case Nil => " may play any card"
+          case (_, card) :: _ =>
+            s" must play a ${if (card.isTrump) "trump card"
+            else s"card of ${card.suit.name} suit"} if ${addressOfPlayer.toLowerCase} have one" + playedCards
+              .map({ case (player, card) => s"$player played $card" })
+              .mkString(" and ")
+        }) + ". "
+      } else ""
+
+    val turnOrderInfo = "Players turns are in the following order: " + players
+      // .map(_.name)
+      .map(identity(_)) // for ease while developing
+      .mkString(" -> ") + players.headOption.fold("")(first => s" (-> $first)")
+
+    val tableReadyInfo = for {
+      player <- getPlayerWithId(id)
+      game <- getGame
+      whoNeedsToAct <-
+        game.fold(whoMakesGameChoice)(_ => if (soloNeedsToStash) soloPlayer else whoseTurn)
+      playerNeedsToAct = player == whoNeedsToAct
+      playedCards <- whoPlayedWhatInCurrentTrickInOrder
+    } yield actionInfo(playerNeedsToAct, whoNeedsToAct, game) +
+      currentTrickInfo(game.isDefined, playerNeedsToAct, playedCards) + turnOrderInfo
+
+    if (playersNeeded > 0)
+      s"Waiting for $playersNeeded more player${if (playersNeeded == 1) "" else "s"}.".asRight
+    else tableReadyInfo
+  }
+
+  def gameTypeInfo = ???
 
   def seatPlayer(name: String, id: String): Either[ErrorMessage, Table] =
     if (players.length < 3)
@@ -240,9 +310,9 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
         if (round.makesGameChoice == player)
           pickGameTypeOrPass(round, player)
         else
-          s"It's not your turn to make a game choice, it's ${round.makesGameChoice.name}'s turn.".asLeft
+          s"It's not your turn to make a game choice, it's ${round.makesGameChoice}'s turn.".asLeft
       )(game =>
-        s"This rounds game type has already been determined as $game by ${round.makesGameChoice.name}.".asLeft
+        s"This rounds game type has already been determined as $game by ${round.makesGameChoice}.".asLeft
       )
     } yield table
   }
@@ -254,7 +324,7 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
     choosesGameType <- whoMakesGameChoice
     table <-
       game.fold(
-        s"Game type has not been determined, it's ${choosesGameType.name}'s turn to make a game choice."
+        s"Game type has not been determined, it's $choosesGameType's turn to make a game choice."
           .asLeft[Table]
       )(gameType =>
         if (turn == player) {
@@ -264,7 +334,7 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
             card <- Card.of(card)
           } yield ???
         } else
-          s"It's not your turn to play a card, it's ${turn.name}'s turn.".asLeft
+          s"It's not your turn to play a card, it's $turn's turn.".asLeft
       )
   } yield table
 
@@ -283,12 +353,12 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
             newRound <- round.stashCards(player, tableCards)
             table <- copy(round = newRound.some).asRight
           } yield table
-        } else s"You don't need to stash, ${solo.name} does.".asLeft
+        } else s"You don't need to stash, $solo does.".asLeft
       else
         (game match {
           case Some(gameType) =>
             if (gameType == Big)
-              s"${if (playerIsSolo) "You have" else s"${solo.name} has"} already stashed."
+              s"${if (playerIsSolo) "You have" else s"$solo has"} already stashed."
             else
               s"Cards only need to be stashed, when the game type is Big, but it is $gameType."
           case None =>

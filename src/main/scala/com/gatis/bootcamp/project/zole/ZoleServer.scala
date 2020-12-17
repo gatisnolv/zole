@@ -7,7 +7,7 @@ import com.gatis.bootcamp.project.zole.Routes.httpApp
 import com.gatis.bootcamp.project.cache.ExpiringCache.Cache
 import scala.concurrent.duration._
 
-object ZoleHttpServer extends IOApp {
+object ZoleServer extends IOApp {
   override def run(args: List[String]): IO[ExitCode] = for {
 
     // TODO choose duration that make sense

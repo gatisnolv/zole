@@ -1,6 +1,8 @@
 package com.gatis.bootcamp.project.zole
 
-import cats.implicits._
+// import cats.implicits._
+import cats.syntax.either._
+import cats.syntax.traverse._
 import com.gatis.bootcamp.project.zole.Suit.Diamonds
 import com.gatis.bootcamp.project.zole.Rank._
 
