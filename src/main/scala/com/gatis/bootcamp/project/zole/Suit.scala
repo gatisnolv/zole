@@ -11,7 +11,7 @@ sealed abstract class Suit private (val character: Char, val name: String) {
     case Hearts   => "♥"
     case Diamonds => "♦"
   }
-  def queenAndJackSuitStrength = Suit.ordered.indexOf(this)
+  def queensAndJacksStrength = Suit.ordered.indexOf(this)
 }
 
 object Suit {

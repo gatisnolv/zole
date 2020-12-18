@@ -1,6 +1,5 @@
 package com.gatis.bootcamp.project.zole
 
-// import cats.implicits._
 import cats.syntax.either._
 import cats.syntax.traverse._
 import com.gatis.bootcamp.project.zole.Suit.Diamonds
@@ -10,15 +9,12 @@ final case class Card(rank: Rank, suit: Suit) extends Ordered[Card] {
   import Card._
 
   override def compare(that: Card): Int =
-    if (this.isTrump) {
-      compareTrumpToOtherCard(this, that)
-    } else {
-      if (that.isTrump) // this is non-trump, other trump
-        -1
-      else { // both non-trump
-        if (this.rank == that.rank) { // non-trump cards of same rank don't have strength ordering
-          0
-        } else this.rank.strength - that.rank.strength
+    if (this.isTrump) compareTrumpToOtherCard(this, that)
+    else {
+      if (that.isTrump) -1
+      else {
+        if (this.rank == that.rank) 0 // non-trump cards of same rank don't have strength ordering
+        else this.rank.strength - that.rank.strength
       }
     }
 
@@ -30,25 +26,22 @@ final case class Card(rank: Rank, suit: Suit) extends Ordered[Card] {
 object Card {
 
   private def compareTrumpToOtherCard(trump: Card, other: Card) =
-    if (other.isTrump) // both trump
-      if (trump.rank == other.rank) { // both either queens or jacks, so suit ordering determines strength
-        trump.suit.queenAndJackSuitStrength - other.suit.queenAndJackSuitStrength
-      } else trump.rank.strength - other.rank.strength
-    else // other is non-trump
-      1
+    if (other.isTrump)
+      if (trump.rank == other.rank)
+        // both either queens or jacks, so suit ordering determines strength
+        trump.suit.queensAndJacksStrength - other.suit.queensAndJacksStrength
+      else trump.rank.strength - other.rank.strength
+    else 1
 
   //only for pretty ordering in hand, keeping same suit cards together
   object InHandPrettyOrdering extends Ordering[Card] {
     override def compare(one: Card, other: Card): Int =
-      if (one.isTrump) {
-        compareTrumpToOtherCard(one, other)
-      } else {
-        if (other.isTrump) // this is non-trump, other trump
-          -1
-        else { // both non-trump
-          if (one.suit == other.suit) { // non-trump cards of same rank don't have strength ordering
-            one.rank.strength - other.rank.strength
-          } else one.suit.queenAndJackSuitStrength - other.suit.queenAndJackSuitStrength
+      if (one.isTrump) compareTrumpToOtherCard(one, other)
+      else {
+        if (other.isTrump) -1
+        else {
+          if (one.suit == other.suit) one.rank.strength - other.rank.strength
+          else one.suit.queensAndJacksStrength - other.suit.queensAndJacksStrength
         }
       }
   }

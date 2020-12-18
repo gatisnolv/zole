@@ -2,7 +2,6 @@ package com.gatis.bootcamp.project.zole
 
 sealed abstract class Rank private (val value: Char, val points: Int) {
   override def toString: String = value.toString
-  // applies to trump cards, for full comparison between cards, need to take suit into account
   def strength: Int = Rank.ordered.indexOf(this)
 }
 
