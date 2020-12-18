@@ -76,7 +76,7 @@ object Routes {
             code <- IO.pure("AAA") // for ease while developing
             text =
               s"Game table code: $code, proceed registering 3 players for the game, by sending " +
-                "POST requests to /register with JSON with fields code and name"
+                "POST requests to /register with JSON in body with fields code and name"
             response <- tables.put(code, Table.empty) *> Ok(text)
           } yield response
 
@@ -152,7 +152,6 @@ object Routes {
             id <- getCookie(req, "uuid")
             code <- getCookie(req, "code")
             table <- getTable(code)
-            game <- table.getGame.io
             info = table.statusInfo(id)
             response <- Ok(info)
           } yield response).handleErrors

@@ -31,7 +31,7 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
 
   def getTableCards = getRound.map(_.tableCards)
 
-  def firstCardOfCurrentTrick = getRound.map(_.firstCardOfCurrentTrick)
+  // def firstCardOfCurrentTrick = getRound.map(_.firstCardOfCurrentTrick)
 
   def whoPlayedWhatInCurrentTrickInOrder = getRound.flatMap(_.whoPlayedWhatInCurrentTrickInOrder)
 
@@ -41,37 +41,34 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
     cards <- round.playersCards(player)
   } yield Table.arrangeCardsInHand(cards)
 
-  def whoseTurn = for {
-    round <- getRound
-    game <- getGame
-    result <- game match {
-      case None =>
-        whoseTurnToMakeGameChoice.flatMap(makesChoice =>
-          s"$makesChoice needs to make a game choice before anybody can play a card.".asLeft
-        )
-      case Some(value) => round.turn.asRight
-    }
-  } yield result
-  getRound.map(_.turn)
-
-  def cardsCanBePlayed = whoseTurn.isRight
-
   // different from turnToMakeGameChoice in that doesn't error when gameType is set, not sure if I'll need this yet
-  def whoDeterminedGameType = ???
+  // def whoDeterminedGameType = ???
 
-  def whoseTurnToMakeGameChoice = for {
+  def turnToMakeGameChoice = for {
     round <- getRound
     game <- getGame
-    result <- game match {
-      case None => round.makesGameChoice.asRight
-      case Some(value) =>
-        s"Game type has already been determined by ${round.makesGameChoice}".asLeft
-    }
+    result <- game.fold(round.makesGameChoice.asRight[ErrorMessage])(_ =>
+      s"Game type has already been determined by ${round.makesGameChoice}".asLeft
+    )
   } yield result
+
+  def gameChoiceExpected = turnToMakeGameChoice.isRight
+
+  def soloPlayer = for {
+    round <- getRound
+    game <- getGame
+    solo <- game.fold(
+      "Game type has not been determined, thus if and who will play solo.".asLeft[Player]
+    )(gameType =>
+      round.playsSolo.fold(s"The game type $gameType does not have a solo player.".asLeft[Player])(
+        player => player.asRight
+      )
+    )
+  } yield solo
 
   def roundHasSoloPlayer = soloPlayer.isRight
 
-  def soloNeedsToStash: Boolean = soloIfNeedsToStash.isRight
+  def soloPlayersOpponents = soloPlayer.map(solo => players.filterNot(_ == solo))
 
   def soloIfNeedsToStash = for {
     game <- getGame
@@ -90,21 +87,24 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
 
   } yield result
 
-  def soloPlayer: Either[ErrorMessage, Player] = for {
-    round <- getRound
-    game <- getGame
-    solo <- game match {
-      case None =>
-        "Game type has not been determined, it is yet to be determined if and who will play solo.".asLeft
-      case Some(gameType) =>
-        round.playsSolo match {
-          case None         => s"The game type $gameType does not have a solo player.".asLeft
-          case Some(player) => player.asRight
-        }
-    }
-  } yield solo
+  def soloNeedsToStash = soloIfNeedsToStash.isRight
 
-  def soloPlayersOpponents = soloPlayer.map(solo => players.filterNot(_ == solo))
+  def turnToPlayCard = for {
+    round <- getRound
+    result <-
+      if (gameChoiceExpected)
+        turnToMakeGameChoice.flatMap(makesChoice =>
+          s"$makesChoice needs to make a game choice before anybody can play a card.".asLeft
+        )
+      else if (soloNeedsToStash)(
+        soloIfNeedsToStash
+          .flatMap(solo => s"$solo needs to stash cards before anybody can play a card.".asLeft)
+        )
+      else round.turn.asRight
+  } yield result
+  getRound.map(_.turn)
+
+  def cardsCanBePlayed = turnToPlayCard.isRight
 
   def turnOrderInfo = getRound.map(_ =>
     "Players turns are in the following order: " + players
@@ -141,9 +141,10 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
         case Nil => " may play any card"
         case (_, card) :: _ =>
           s" must play a ${if (card.isTrump) "trump card"
-          else s"card of ${card.suit.name} suit"} if ${addressOfPlayer.toLowerCase} have one," + playedCards
-            .map({ case (player, card) => s"$player played $card" })
-            .mkString(" and ")
+          else s"card of ${card.suit.name} suit"} if ${addressOfPlayer.toLowerCase} have one. " +
+            playedCards
+              .map({ case (player, card) => s"$player played $card" })
+              .mkString(" and ")
       }) + ". "
     }
 
@@ -151,7 +152,9 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
       player <- playerWithId(id)
       game <- getGame
       needsToAct <-
-        game.fold(whoseTurnToMakeGameChoice)(_ => if (soloNeedsToStash) soloPlayer else whoseTurn)
+        if (gameChoiceExpected) turnToMakeGameChoice
+        else if (soloNeedsToStash) soloIfNeedsToStash
+        else turnToPlayCard
       playerNeedsToAct = player == needsToAct
       basicInfo = getGameTypeInfo(game) + getActionInfo(playerNeedsToAct, needsToAct, game)
       info <- game.fold((basicInfo).asRight[ErrorMessage])(_ =>
@@ -189,71 +192,63 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
 
   def makeGameChoice(id: String, choice: String): Either[ErrorMessage, Table] = {
 
-    def pickGameTypeOrPass(round: Round, player: Player) = for {
-      gameType <- GameChoice.getGameType(choice, round.playersPassed)
+    def pickGameTypeOrPass(player: Player) = for {
+      round <- getRound
+      game <- GameChoice.getGameType(choice, round.playersPassed)
       next <- nextAfter(player)
-      newRound <- gameType.fold(round.pass(next).asRight[ErrorMessage])(gameType => {
+      newRound <- game.fold(round.pass(next).asRight[ErrorMessage])(gameType => {
         val roundWithGameType = round.setGameType(gameType)
         gameType match {
           case TheTable => roundWithGameType.asRight
-          case Big      => roundWithGameType.takeTableCards(player)
-          case _        => roundWithGameType.setSolo(player).asRight
+          case gameType => {
+            val roundWithSolo = roundWithGameType.setSolo(player)
+            if (gameType == Big) roundWithSolo.takeTableCards(player) else roundWithSolo.asRight
+          }
         }
       })
       newTable <- copy(round = newRound.some).asRight
     } yield newTable
 
-    for {
-      player <- playerWithId(id)
-      makesChoice <- whoseTurnToMakeGameChoice
-      round <- getRound
-      table <-
-        if (makesChoice == player) pickGameTypeOrPass(round, player)
-        else s"It's not your turn to make a game choice, it's $makesChoice's turn.".asLeft
-    } yield table
+    doActionIfTurn(id, turnToMakeGameChoice, pickGameTypeOrPass, "make a game choice")
   }
 
   def stashCards(id: String, cards: String): Either[ErrorMessage, Table] = {
 
-    def getNewTable(round: Round, player: Player) = for {
+    def stash(player: Player) = for {
+      round <- getRound
       cards <- Card.multiple(cards)
       tableCards <- TableCards.of(cards.toSet)
       newRound <- round.stashCards(player, tableCards)
       table <- copy(round = newRound.some).asRight
     } yield table
 
-    for {
-      player <- playerWithId(id)
-      round <- getRound
-      game <- getGame
-      solo <- soloIfNeedsToStash
-      playerIsSolo = player == solo
-      table <-
-        if (playerIsSolo) getNewTable(round, player)
-        else s"You don't need to stash, $solo does.".asLeft
-    } yield table
+    doActionIfTurn(id, soloIfNeedsToStash, stash, "stash cards")
   }
 
-  //rework
-  def playCard(id: String, card: String): Either[ErrorMessage, Table] = for {
+  def playCard(id: String, card: String): Either[ErrorMessage, Table] = {
+
+    def play(player: Player): Either[ErrorMessage, Table] = for {
+      round <- getRound
+      card <- Card.of(card)
+      next <- nextAfter(player)
+      newRound <- round.playCard(player, next, card)
+      table <- copy(round = newRound.some).asRight
+    } yield table
+
+    doActionIfTurn(id, turnToPlayCard, play, "play a card")
+  }
+
+  private def doActionIfTurn(
+    id: String,
+    turnToAct: Either[ErrorMessage, Player],
+    action: Player => Either[ErrorMessage, Table],
+    message: String
+  ) = for {
     player <- playerWithId(id)
-    turn <- whoseTurn
-    game <- getGame
-    makesChoice <- whoseTurnToMakeGameChoice
+    turn <- turnToAct
     table <-
-      game.fold(
-        s"Game type has not been determined, it's $makesChoice's turn to make a game choice."
-          .asLeft[Table]
-      )(gameType =>
-        if (turn == player) {
-          // continue here
-          // add checks that a turn can actually happen, e.g. account for Big needing to stash two cards before the game can continue
-          for {
-            card <- Card.of(card)
-          } yield ???
-        } else
-          s"It's not your turn to play a card, it's $turn's turn.".asLeft
-      )
+      if (player == turn) action(player)
+      else s"It's not your turn to $message, it's $turn's turn".asLeft
   } yield table
 
   def firstRound = newRound(players(0))
@@ -302,12 +297,12 @@ object Table extends App {
   def aceClubs = Card(Ace, Clubs)
   def sevenDiamonds = Card(Seven, Diamonds)
 
-  println((Trick.of(queen(Clubs), queen(Diamonds), queen(Spades))).decideTrickWinner)
-  println((Trick.of(queen(Spades), queen(Diamonds), queen(Clubs))).decideTrickWinner)
-  println((Trick.of(nineHearts, tenHearts, aceClubs)).decideTrickWinner)
-  println((Trick.of(nineHearts, tenHearts, sevenDiamonds)).decideTrickWinner)
+  // println((Trick.of(queen(Clubs), queen(Diamonds), queen(Spades))).decideTrickWinner)
+  // println((Trick.of(queen(Spades), queen(Diamonds), queen(Clubs))).decideTrickWinner)
+  // println((Trick.of(nineHearts, tenHearts, aceClubs)).decideTrickWinner)
+  // println((Trick.of(nineHearts, tenHearts, sevenDiamonds)).decideTrickWinner)
 
-  println(Trick.of(nineHearts, tenHearts, aceClubs).points)
+  // println(Trick.of(nineHearts, tenHearts, aceClubs).points)
 
   val testTable = Table(List(Player.of("a", "1"), Player.of("b", "2"), Player.of("c", "3")), None)
   val firstPlayer = testTable.players(0)
