@@ -18,7 +18,6 @@ object Rank {
   val ordered: List[Rank] = Seven :: Eight :: Nine :: King :: Ten :: Ace :: Jack :: Queen :: Nil
 
   def of(x: Char): Either[ErrorMessage, Rank] = {
-    //minor detail: maybe change to map?
     ordered.find(_.value == x).toRight(s"Unrecognized rank $x")
   }
 }

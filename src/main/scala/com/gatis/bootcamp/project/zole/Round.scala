@@ -3,43 +3,58 @@ package com.gatis.bootcamp.project.zole
 import cats.syntax.option._
 import cats.syntax.either._
 import cats.syntax.traverse._
+import com.gatis.bootcamp.project.zole.GameChoice._
 
 case class Round private (
   game: Option[GameType],
-  // remember to change playsSolo (lielais) role between rounds
   playsSolo: Option[Player],
-  // could have Map[Player, (Set[Card], Boolean)] to designate whether picked up yet
+  // while a trick is not complete played cards are kept in players hands to decide winner after completion
   hands: Map[Player, Set[Card]],
-  // tracks tricks, the respective taker
-  tricks: List[(Trick, Option[Player])],
+  tricks: List[Trick],
   // pirmā roka - stays constant for the round
   firstHand: Player,
-  // kam jāliek kārts
   turn: Player,
-  // player who chooses game type
   makesGameChoice: Player,
-  // to track how many passed (garām), because The Table starts once every player passes, so we don't loop more than once
   playersPassed: Int,
   tableCards: TableCards
 ) {
 
   // the last trick is either the last complete trick if new one has not yet started or the cards forming the new one
-  def lastTrick = tricks.headOption.fold(Set.empty[Card])({ case (trick, _) => trick.cards.toSet })
+  def lastTrick = tricks.headOption.fold(Set.empty[Card])(_.cards.toSet)
 
-  // likely to be subsumed by playCard. maybe with this also store points/tricks for the players
-  // def saveTrick(trick: Trick) = ??? // copy(tricks = trick :: tricks)
+  // round is complete if all cards have been played or if the game type is SmallZole and solo has picked up a trick
+  def isComplete = tricks.length == 8 && tricks.forall(_.isComplete) ||
+    game.contains(SmallZole) && playsSolo.fold(false)(solo =>
+      tricks.map(_.winner).exists(_.contains(solo))
+    )
 
-  // def firstCardOfCurrentTrick = currentTrick.lastOption
-
+  def calculateScores: Either[ErrorMessage, Map[Player, Int]] = {
+    val roundIncomplete = "Scores can be calculated only once the round is complete.".asLeft
+    if (isComplete)
+      game.fold(roundIncomplete)(gameType =>
+        gameType match {
+          case Big       => ???
+          case Zole      => ???
+          case SmallZole => ???
+          case TheTable  => ???
+        }
+      )
+    else roundIncomplete
+  }
   def whoPlayedCardInCurrentTrick(card: Card): Either[ErrorMessage, Player] = hands
-    .find({ case (player, cards) => cards.contains(card) })
+    .find({ case (_, cards) => cards.contains(card) })
     .map({ case (player, _) => player })
     .toRight("This card was not played in the current trick.")
 
-  def whoPlayedWhatInCurrentTrickInOrder =
-    tricks.headOption.fold(List.empty[(Player, Card)].asRight[String])({ case (trick, _) =>
-      trick.cards.reverse.map(card => whoPlayedCardInCurrentTrick(card).map((_, card))).sequence
-    })
+  def whoPlayedWhatInCurrentTrickOrdered = tricks.headOption.fold(
+    List.empty[(Player, Card)].asRight[String]
+  )(_.cards.reverse.map(card => whoPlayedCardInCurrentTrick(card).map((_, card))).sequence)
+
+  private def cardPlayedInCurrentTrick(player: Player) = tricks.headOption.fold(Option.empty[Card])(
+    _.cards
+      .find(card => whoPlayedCardInCurrentTrick(card) == player)
+      .fold(Option.empty[Card])(_.some)
+  )
 
   def setSolo(player: Player) = copy(playsSolo = Some(player))
 
@@ -50,9 +65,12 @@ case class Round private (
       copy(tableCards = TableCards.empty, hands = hands.updated(player, cards ++ tableCards.cards))
     )
 
-  def playersCards(player: Player) = hands
+  private def playersCards(player: Player) = hands
     .get(player)
     .fold(s"Unexpected error: $player's cards not found".asLeft[Set[Card]])(_.asRight)
+
+  def playersHand(player: Player) =
+    playersCards(player).map(cards => cardPlayedInCurrentTrick(player).fold(cards)(cards - _))
 
   def stashCards(player: Player, stash: TableCards) = playersCards(player).flatMap(cards =>
     if (stash.cards.forall(cards.contains(_)))
@@ -62,38 +80,53 @@ case class Round private (
 
   def pass(next: Player) = copy(makesGameChoice = next, playersPassed = playersPassed + 1)
 
-  // TODO should also set up for next trick, inform of the trick winner
-  // while trick is not complete, leave the card in players hand
-  def playCard(player: Player, next: Player, card: Card) = playersCards(player).flatMap(cards => {
+  def playCard(player: Player, next: Player, card: Card) = {
+
+    def newTricks = tricks match {
+      case Nil => (Trick.start(card) :: Nil).asRight
+      case current :: rest =>
+        if (current.isComplete) (Trick.start(card) :: tricks).asRight[ErrorMessage]
+        else
+          for {
+            withCardAdded <- current.add(card)
+            newTrick <-
+              if (withCardAdded.isComplete)
+                trickWinner(withCardAdded).flatMap(withCardAdded.setWinner(_))
+              else withCardAdded.asRight
+          } yield newTrick :: rest
+    }
 
     def trickWinner(trick: Trick) =
       if (trick.isComplete)
         for {
-          player <- trick.decideWinner.flatMap(whoPlayedCardInCurrentTrick(_))
-        } yield player.some
-      else None.asRight
+          card <- trick.winningCard
+          player <- whoPlayedCardInCurrentTrick(card)
+        } yield player
+      else "A winner can be decided only for complete tricks.".asLeft
 
-    if (cards.contains(card)) {
-      val newTrickEither =
-        tricks.headOption.fold((Trick.start(card), Option.empty[Player]).asRight[ErrorMessage])({
-          case (trick, _) =>
-            if (trick.isComplete) (Trick.start(card), None).asRight
-            else
-              for {
-                newTrick <- trick.add(card)
-                winner <- trickWinner(trick)
-              } yield (newTrick, winner)
-        })
+    def newHands(tricks: List[Trick]) = tricks.headOption.fold(hands.asRight[ErrorMessage])(trick =>
+      if (trick.isComplete)
+        hands.toList
+          .foldLeft(List.empty[Either[ErrorMessage, (Player, Set[Card])]])({
+            case (acc, (player, _)) => playersHand(player).map((player, _)) :: acc
+          })
+          .sequence
+          .map(_.toMap)
+      else hands.asRight
+    )
 
-      // TODO implement removal of current trick cards from players hand cards if trick was completed in this move
-
-      newTrickEither.flatMap(newTrick => copy(tricks = newTrick :: tricks).asRight[ErrorMessage])
-    } else "You are trying to play a card you don't have".asLeft
-  })
-
-  // TODO maybe have this, so at the end of a round players can review the tricks (at least the roundscore) before the next one starts
-  // likely to be subsumed by play card after a complete round
-  // def nextRound=
+    if (isComplete)
+      "The round is complete, no cards can be played. You may start a new round.".asLeft
+    else
+      playersCards(player).flatMap(cards => {
+        if (cards.contains(card))
+          for {
+            tricks <- newTricks
+            hands <- newHands(tricks)
+          } yield copy(hands = hands, tricks = tricks, turn = next)
+        else "You are trying to play a card you don't have".asLeft
+      })
+  }
 
 }
 

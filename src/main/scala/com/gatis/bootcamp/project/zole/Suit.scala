@@ -5,6 +5,7 @@ import cats.syntax.either._
 sealed abstract class Suit private (val character: Char, val name: String) {
   import Suit._
   // override def toString: String = character.toString
+  // for ease while developing
   override def toString: String = this match {
     case Clubs    => "♣"
     case Spades   => "♠"

@@ -37,10 +37,7 @@ object Routes {
       for {
         generatedCode <- IO(generateCode)
         table <- tables.get(generatedCode)
-        codeIO = table match {
-          case Some(value) => IO.suspend(getNewGameCode)
-          case None        => IO(generatedCode)
-        }
+        codeIO = table.fold(IO.pure(generatedCode))(_ => IO.suspend(getNewGameCode))
         code <- codeIO
       } yield code
     }
@@ -70,10 +67,12 @@ object Routes {
 
       HttpRoutes.of[IO] {
 
-        case POST -> Root / "new" => // could combine with functionality to register the invoker (of course need to privde name in req), include uuid in response
+        // could combine with functionality to register the invoker (of course need to privde name in req), include uuid in response
+        case POST -> Root / "new" =>
           for {
             // code <- getNewGameCode
-            code <- IO.pure("AAA") // for ease while developing
+            // for ease while developing
+            code <- IO.pure("AAA")
             text =
               s"Game table code: $code, proceed registering 3 players for the game, by sending " +
                 "POST requests to /register with JSON in body with fields code and name"
@@ -102,8 +101,8 @@ object Routes {
             id <- getCookie(req, "uuid")
             code <- getCookie(req, "code")
             table <- getTable(code)
-            cards <- table.playersCards(id).io
-            response <- Ok(cards.mkString(", "))
+            hand <- table.playersHand(id).io
+            response <- Ok(hand.mkString(", "))
           } yield response).handleErrors
 
         case req @ POST -> Root / "choice" / choice =>
@@ -123,8 +122,8 @@ object Routes {
             code <- getCookie(req, "code")
             table <- getTable(code)
             table <- table.stashCards(id, cards).save(code)
-            cards <- table.playersCards(id).io
-            response <- Ok(cards.mkString(", "))
+            hand <- table.playersHand(id).io
+            response <- Ok(hand.mkString(", "))
           } yield response).handleErrors
 
         case req @ GET -> Root / "turnOrder" =>
@@ -141,12 +140,11 @@ object Routes {
             code <- getCookie(req, "code")
             table <- getTable(code)
             table <- table.playCard(id, card).save(code)
-            // could return hand cards post playing the card
-            // continue here
+            // TODO could return hand cards post playing the card
+            // TODO continue here
             response <- Ok()
           } yield response).handleErrors
 
-        //whose turn either to place a card or to make a game choice
         case req @ GET -> Root / "turn" =>
           (for {
             id <- getCookie(req, "uuid")
@@ -162,11 +160,11 @@ object Routes {
             id <- getCookie(req, "uuid")
             code <- getCookie(req, "code")
             table <- getTable(code)
-            // continue here
+            // TODO continue here
             response <- Ok()
           } yield response).handleErrors
 
-        // add endpoint for looking at last trick
+        // TODO add endpoint for looking at last trick
       }
     }
 

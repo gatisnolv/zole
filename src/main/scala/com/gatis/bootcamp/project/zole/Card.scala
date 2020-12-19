@@ -33,7 +33,7 @@ object Card {
       else trump.rank.strength - other.rank.strength
     else 1
 
-  //only for pretty ordering in hand, keeping same suit cards together
+  // only for pretty ordering in hand, keeping same suit cards together
   object InHandPrettyOrdering extends Ordering[Card] {
     override def compare(one: Card, other: Card): Int =
       if (one.isTrump) compareTrumpToOtherCard(one, other)
@@ -51,13 +51,13 @@ object Card {
       suit <- Suit.ordered
       rank <- Rank.ordered
       // } yield Card.of(rank.toString + suit.toString)
-      // for easier visual checking, when suits toString defined as emoji
+      // for ease while developing - easier visual checking, when suits' toString gives emoji
     } yield Card.of(rank.toString + suit.character.toString)
 
     eithers.foldLeft(Set.empty[Card])((acc, el) =>
       el match {
         case Right(card) => acc + card
-        case Left(_)     => acc
+        case _           => acc
       }
     )
   }

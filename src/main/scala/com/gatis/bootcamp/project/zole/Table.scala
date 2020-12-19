@@ -33,13 +33,13 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
 
   // def firstCardOfCurrentTrick = getRound.map(_.firstCardOfCurrentTrick)
 
-  def whoPlayedWhatInCurrentTrickInOrder = getRound.flatMap(_.whoPlayedWhatInCurrentTrickInOrder)
+  def whoPlayedWhatInCurrentTrickInOrder = getRound.flatMap(_.whoPlayedWhatInCurrentTrickOrdered)
 
-  def playersCards(id: String): Either[ErrorMessage, List[Card]] = for {
+  def playersHand(id: String): Either[ErrorMessage, List[Card]] = for {
     round <- getRound
     player <- playerWithId(id)
-    cards <- round.playersCards(player)
-  } yield Table.arrangeCardsInHand(cards)
+    hand <- round.playersHand(player)
+  } yield Table.arrangeCardsInHand(hand)
 
   // different from turnToMakeGameChoice in that doesn't error when gameType is set, not sure if I'll need this yet
   // def whoDeterminedGameType = ???
@@ -102,13 +102,14 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
         )
       else round.turn.asRight
   } yield result
-  getRound.map(_.turn)
 
   def cardsCanBePlayed = turnToPlayCard.isRight
 
   def turnOrderInfo = getRound.map(_ =>
     "Players turns are in the following order: " + players
-      .map(identity(_)) // for ease while developing - includes id
+      // .map(_.name)
+      // for ease while developing - includes id
+      .map(identity(_))
       .mkString(" -> ") + players.headOption.fold("")(first => s" (-> $first)")
   )
 
@@ -231,6 +232,8 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
       round <- getRound
       card <- Card.of(card)
       next <- nextAfter(player)
+      // TODO setup a new round if current is complete, update players scores accordingly
+      // remember to change playsSolo (lielais) role between rounds
       newRound <- round.playCard(player, next, card)
       table <- copy(round = newRound.some).asRight
     } yield table
@@ -264,7 +267,7 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
       s"3 players needed to play, there are now only ${players.length}.".asLeft
     else {
       val deal = Table.dealCards
-      //question is this 'sanity' check really needed here?
+      // question is this 'sanity' check really needed here?
       if (deal.nonEmpty && deal.init.forall(_.size == 8)) {
         // q about use of init, last with regards to exception throwing, I guess, could wrap with Try
         val playersCards = (players zip deal.init).toMap
@@ -278,7 +281,7 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
 
 // extends App for quick testing
 object Table extends App {
-  //write a test for this that it returns a list of 8,8,8,2 sets of cards
+  // write a test for this that it returns a list of 8,8,8,2 sets of cards
   def dealCards = Random.shuffle(allCards.toList).sliding(8, 8).toList.map(_.toSet)
 
   def empty = Table(Nil, None)
