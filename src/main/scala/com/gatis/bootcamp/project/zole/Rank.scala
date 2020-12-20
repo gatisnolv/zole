@@ -1,5 +1,6 @@
 package com.gatis.bootcamp.project.zole
 
+// points = acis
 sealed abstract class Rank private (val value: Char, val points: Int) {
   override def toString: String = value.toString
   def strength: Int = Rank.ordered.indexOf(this)

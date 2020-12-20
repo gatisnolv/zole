@@ -7,7 +7,7 @@ sealed trait GameType
 sealed abstract class GameChoice private (val shortName: String)
 
 object GameChoice {
-  // lielais = pacelt galda kārtis
+  // lielais (pacelt galda kārtis)
   case object Big extends GameChoice("B") with GameType
   // zole
   case object Zole extends GameChoice("Z") with GameType

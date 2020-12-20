@@ -24,21 +24,21 @@ object Routes {
   }
 
   implicit class ErrorHandler(response: IO[Response[IO]]) {
-    // could have different behaviour based on the message, i.e. 4xx, 5xx for unexpected errors
-    def handleErrors = response.handleErrorWith(e => BadRequest(e.getMessage()))
+    def handleErrors = response.handleErrorWith(e => {
+      val message = e.getMessage
+      if (message.startsWith("Unexpected error")) InternalServerError(message)
+      else BadRequest(message)
+    })
   }
 
   private[zole] def httpApp(tables: Cache[IO, String, Table]) = {
 
-    // 3 letter code supports (26^3) 17576 games
     def getNewGameCode: IO[String] = {
-      // check for uniqueness
       def generateCode = Random.alphanumeric.filter(_.isLetter).take(3).mkString.toUpperCase()
       for {
         generatedCode <- IO(generateCode)
         table <- tables.get(generatedCode)
-        codeIO = table.fold(IO.pure(generatedCode))(_ => IO.suspend(getNewGameCode))
-        code <- codeIO
+        code <- table.fold(IO.pure(generatedCode))(_ => IO.suspend(getNewGameCode))
       } yield code
     }
 
@@ -67,7 +67,6 @@ object Routes {
 
       HttpRoutes.of[IO] {
 
-        // could combine with functionality to register the invoker (of course need to privde name in req), include uuid in response
         case POST -> Root / "new" =>
           for {
             // code <- getNewGameCode
@@ -90,18 +89,17 @@ object Routes {
               (table.players.foldLeft(0)((acc, el) => Math.max(acc, el.id.toInt)) + 1).toString
             )
             table <- table.seatPlayer(name, id).save(code)
-            info = table.statusInfo(id)
             text = s"Hello, $name, you are registered. " +
-              (if (table.morePlayersNeeded) "" else "The game can begin. ") + info
+              (if (table.morePlayersNeeded) "" else "The game can begin. ") + table.statusInfo(id)
             response <- Ok(text).map(_.addCookie("uuid", id).addCookie("code", code))
           } yield response).handleErrors
 
-        case req @ GET -> Root / "getHandCards" =>
+        case req @ GET -> Root / "hand" =>
           (for {
             id <- getCookie(req, "uuid")
             code <- getCookie(req, "code")
             table <- getTable(code)
-            hand <- table.playersHand(id).io
+            hand <- table.hand(id).io
             response <- Ok(hand.mkString(", "))
           } yield response).handleErrors
 
@@ -122,7 +120,7 @@ object Routes {
             code <- getCookie(req, "code")
             table <- getTable(code)
             table <- table.stashCards(id, cards).save(code)
-            hand <- table.playersHand(id).io
+            hand <- table.hand(id).io
             response <- Ok(hand.mkString(", "))
           } yield response).handleErrors
 

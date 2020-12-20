@@ -5,8 +5,22 @@ import cats.syntax.option._
 
 // stiķis
 case class Trick private (cardsPlayed: List[(Player, Card)]) {
+
   private def containsTrump = cardsPlayed.exists({ case (_, card) => card.isTrump })
+
+  // acis
   def points = cardsPlayed.foldLeft(0)({ case (acc, (_, card)) => acc + card.points })
+
+  def isComplete = cardsPlayed.length >= 3
+
+  def play(card: Card, player: Player) =
+    if (isComplete) "This trick is already has 3 cards and is complete, can't play more".asLeft
+    else copy(cardsPlayed = (player, card) :: cardsPlayed).asRight
+
+  // def whoPlayed(card: Card) = cardsPlayed
+  //   .find { case (player, aCard) => card == aCard }
+  //   .toRight("This card was not played in the current trick.")
+  //   .map { case (player, _) => player }
 
   def winner = {
     implicit val completeTrickCardOrdering = new Ordering[(Player, Card)] {
@@ -28,17 +42,6 @@ case class Trick private (cardsPlayed: List[(Player, Card)]) {
       else incomplete
     }
   }
-
-  def isComplete = cardsPlayed.length >= 3
-
-  def add(card: Card, player: Player) =
-    if (isComplete) "This trick is already has 3 cards and is complete, can't add more".asLeft
-    else copy(cardsPlayed = (player, card) :: cardsPlayed).asRight
-
-  def whoPlayed(card: Card) = cardsPlayed
-    .find { case (player, aCard) => card == aCard }
-    .toRight("This card was not played in the current trick.")
-    .map { case (player, _) => player }
 
 }
 

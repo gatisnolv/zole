@@ -19,7 +19,9 @@ final case class Card(rank: Rank, suit: Suit) extends Ordered[Card] {
     }
 
   override def toString: String = s"$rank$suit"
-  def isTrump = rank == Queen || rank == Jack || suit == Diamonds
+  // trumpe
+  def isTrump = suit == Diamonds || rank == Queen || rank == Jack
+  // acis
   val points = rank.points
 }
 
@@ -33,7 +35,7 @@ object Card {
       else trump.rank.strength - other.rank.strength
     else 1
 
-  // only for pretty ordering in hand, keeping same suit cards together
+  // only for ordering in hand (keeping same suit cards together)
   object InHandPrettyOrdering extends Ordering[Card] {
     override def compare(one: Card, other: Card): Int =
       if (one.isTrump) compareTrumpToOtherCard(one, other)

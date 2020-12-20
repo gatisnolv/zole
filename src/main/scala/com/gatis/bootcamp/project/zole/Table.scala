@@ -33,10 +33,10 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
 
   def whoPlayedWhatInCurrentTrickOrdered = getRound.map(_.whoPlayedWhatInCurrentTrickOrdered)
 
-  def playersHand(id: String): Either[ErrorMessage, List[Card]] = for {
+  def hand(id: String): Either[ErrorMessage, List[Card]] = for {
     round <- getRound
     player <- playerWithId(id)
-    hand <- round.playersHand(player)
+    hand <- round.hand(player)
   } yield Table.arrangeCardsInHand(hand)
 
   // different from turnToMakeGameChoice in that doesn't error when gameType is set, not sure if I'll need this yet
@@ -101,14 +101,11 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
       else round.turn.asRight
   } yield result
 
-  def cardsCanBePlayed = turnToPlayCard.isRight
+  def cardCanBePlayed = turnToPlayCard.isRight
 
   def turnOrderInfo = getRound.map(_ =>
-    "Players turns are in the following order: " + players
-      // .map(_.name)
-      // for ease while developing - includes id
-      .map(identity(_))
-      .mkString(" -> ") + players.headOption.fold("")(first => s" (-> $first)")
+    "Players turns are in the following order: " +
+      players.mkString(" -> ") + players.headOption.fold("")(first => s" (-> $first)")
   )
 
   def statusInfo(id: String) = {
@@ -210,8 +207,7 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
           }
         }
       })
-      newTable <- copy(round = newRound.some).asRight
-    } yield newTable
+    } yield copy(round = newRound.some)
 
     doActionIfTurn(id, turnToMakeGameChoice, pickGameTypeOrPass, "make a game choice")
   }
@@ -223,8 +219,7 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
       cards <- Card.multiple(cards)
       tableCards <- TableCards.of(cards.toSet)
       newRound <- round.stashCards(player, tableCards)
-      table <- copy(round = newRound.some).asRight
-    } yield table
+    } yield copy(round = newRound.some)
 
     doActionIfTurn(id, soloIfNeedsToStash, stash, "stash cards")
   }
@@ -236,8 +231,7 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
       card <- Card.of(card)
       next <- nextAfter(player)
       newRound <- round.playCard(player, next, card)
-      table <- copy(round = newRound.some).asRight
-    } yield table
+    } yield copy(round = newRound.some)
 
     doActionIfTurn(id, turnToPlayCard, play, "play a card")
   }
