@@ -62,7 +62,7 @@ object Routes {
 
     val gameRoutes = {
       import io.circe.generic.auto._
-      import io.circe.syntax._
+      // import io.circe.syntax._
       import org.http4s.circe.CirceEntityCodec._
 
       HttpRoutes.of[IO] {
@@ -165,6 +165,22 @@ object Routes {
           } yield response).handleErrors
 
         // TODO add endpoint for looking at last trick
+
+        // TODO endpoint for round points
+
+        // TODO endpoint for scores
+
+        case req @ POST -> Root / "nextRound" =>
+          (for {
+            id <- getCookie(req, "uuid")
+            code <- getCookie(req, "code")
+            table <- getTable(code)
+            table <- table.nextRound.save(code)
+            info = table.statusInfo(id)
+            text = "The next round can begin. " + info
+            // TODO continue here
+            response <- Ok()
+          } yield response).handleErrors
       }
     }
 

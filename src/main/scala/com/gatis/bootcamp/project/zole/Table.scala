@@ -7,6 +7,7 @@ import com.gatis.bootcamp.project.zole.Card._
 import cats.syntax.either._
 import cats.syntax.option._
 import com.gatis.bootcamp.project.zole.GameChoice._
+import cats.syntax.traverse._
 
 case class Table private (val players: List[Player], val round: Option[Round]) {
 
@@ -23,15 +24,14 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
   def getRound =
     round.fold(s"Need $playersNeeded more players to start playing.".asLeft[Round])(_.asRight)
 
-  def nextAfter(player: Player) = getRound.map(_ => players((players.indexOf(player) + 1) % 3))
+  def nextAfter(player: Player) =
+    getRound.map(_ => players((players.indexOf(player) + 1) % players.length))
 
   def getGame = getRound.map(_.game)
 
-  def playersPassed = getRound.map(_.playersPassed)
+  def passedOrdered = getRound.map(_.passed.reverse)
 
   def getTableCards = getRound.map(_.tableCards)
-
-  // def firstCardOfCurrentTrick = getRound.map(_.firstCardOfCurrentTrick)
 
   def whoPlayedWhatInCurrentTrickInOrder = getRound.flatMap(_.whoPlayedWhatInCurrentTrickOrdered)
 
@@ -125,16 +125,20 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
           solo <- soloPlayer
           opponents <- soloPlayersOpponents
         } yield
-          (if (player == solo) "Your are" else s"$solo is") +
+          (if (player == solo) " Your are" else s"$solo is") +
             s"playing solo against ${opponents.map(_.name).mkString(" and ")}. "
-      else "This game type does not have a solo player. ".asRight
+      else " This game type does not have a solo player. ".asRight
 
-    def getActionInfo(playerNeedsToAct: Boolean, whoNeedsToAct: Player, game: Option[GameType]) =
-      s"It's ${if (playerNeedsToAct) "your" else s"$whoNeedsToAct's"} turn to " +
-        // TODO add info about who has already passed
-        game.fold("make a game choice")(_ =>
-          if (soloNeedsToStash) "stash two cards" else "play a card"
-        ) + ". "
+    def getActionInfo(
+      playerNeedsToAct: Boolean,
+      whoNeedsToAct: Player,
+      game: Option[GameType],
+      passed: List[Player]
+    ) = s"It's ${if (playerNeedsToAct) "your" else s"$whoNeedsToAct's"} turn to " +
+      game.fold("make a game choice" + (passed match {
+        case _ :: _ => ". " + passed.mkString(" and ") + " already passed"
+        case _      => ""
+      }))(_ => if (soloNeedsToStash) "stash two cards" else "play a card") + "."
 
     def getCurrentTrickInfo(playerNeedsToAct: Boolean, playedCards: List[(Player, Card)]) = {
       val addressOfPlayer = if (playerNeedsToAct) "You" else "They"
@@ -157,7 +161,8 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
         else if (soloNeedsToStash) soloIfNeedsToStash
         else turnToPlayCard
       playerNeedsToAct = player == needsToAct
-      basicInfo = getGameTypeInfo(game) + getActionInfo(playerNeedsToAct, needsToAct, game)
+      passed <- passedOrdered
+      basicInfo = getGameTypeInfo(game) + getActionInfo(playerNeedsToAct, needsToAct, game, passed)
       info <- game.fold((basicInfo).asRight[ErrorMessage])(_ =>
         for {
           soloInfo <- getSoloInfo(player)
@@ -173,9 +178,9 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
   def gameChoiceInfo(gamePreChoice: Option[GameType]): Either[ErrorMessage, String] = gamePreChoice
     .fold(
       getGame.map(game =>
-        game.fold("You passed. ")(gameType =>
-          if (gameType == TheTable) "You passed last. "
-          else "" + s"The game type will be $gameType. "
+        game.fold("You passed.")(gameType =>
+          (if (gameType == TheTable) "You passed last."
+           else "") + s" The game type will be $gameType."
         )
       )
     )(_ => "The game type was already set".asLeft[String])
@@ -187,7 +192,7 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
       else {
         // a choice to have the first seated be the starting player, so appending here
         val newTable = copy(players = players :+ Player.of(name, id))
-        if (morePlayersNeeded) newTable.asRight else newTable.firstRound
+        if (newTable.morePlayersNeeded) newTable.asRight else newTable.firstRound
       }
     else "There are 3 players at this table already.".asLeft
 
@@ -195,9 +200,9 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
 
     def pickGameTypeOrPass(player: Player) = for {
       round <- getRound
-      game <- GameChoice.getGameType(choice, round.playersPassed)
+      game <- GameChoice.getGameType(choice, round.passed.length)
       next <- nextAfter(player)
-      newRound <- game.fold(round.pass(next).asRight[ErrorMessage])(gameType => {
+      newRound <- game.fold(round.pass(player, next).asRight[ErrorMessage])(gameType => {
         val roundWithGameType = round.setGameType(gameType)
         gameType match {
           case TheTable => roundWithGameType.asRight
@@ -232,8 +237,6 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
       round <- getRound
       card <- Card.of(card)
       next <- nextAfter(player)
-      // TODO setup a new round if current is complete, update players scores accordingly
-      // remember to change playsSolo (lielais) role between rounds
       newRound <- round.playCard(player, next, card)
       table <- copy(round = newRound.some).asRight
     } yield table
@@ -254,15 +257,25 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
       else s"It's not your turn to $message, it's $turn's turn".asLeft
   } yield table
 
-  def firstRound = newRound(players(0))
+  private def firstRound = players match {
+    case first :: _ :: _ :: Nil => newRound(first, players)
+    case _                      => s"Need $playersNeeded more players to start playing.".asLeft
+  }
 
-  // def nextRound = for {
-  // round <- round
-  // next <- next(round.firstHand)
-  // newRound <- newRound(next)
-  // } yield newRound
+  def nextRound = for {
+    round <- getRound
+    next <-
+      if (round.isComplete) for {
+        next <- nextAfter(round.firstHand)
+        scoredPlayers <- players
+          .map(player => round.score(player).flatMap(score => player.updateScore(score).asRight))
+          .sequence
+        table <- newRound(next, scoredPlayers)
+      } yield table
+      else "Next round can be started only when the current is finished.".asLeft
+  } yield next
 
-  private def newRound(first: Player): Either[ErrorMessage, Table] =
+  private def newRound(first: Player, players: List[Player]): Either[ErrorMessage, Table] =
     if (players.length < 3)
       s"3 players needed to play, there are now only ${players.length}.".asLeft
     else {

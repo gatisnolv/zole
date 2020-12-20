@@ -18,13 +18,13 @@ object GameChoice {
   // galdiņš
   case object TheTable extends GameType
 
-  def getGameType(choice: String, playersPassed: Int): Either[ErrorMessage, Option[GameType]] =
+  def getGameType(choice: String, passes: Int): Either[ErrorMessage, Option[GameType]] =
     choice match {
       case Big.shortName       => Big.some.asRight
       case Zole.shortName      => Zole.some.asRight
       case SmallZole.shortName => SmallZole.some.asRight
       // 3 passes means galdiņš
-      case Pass.shortName => (if (playersPassed < 2) None else TheTable.some).asRight
+      case Pass.shortName => (if (passes < 2) None else TheTable.some).asRight
       case _              => s"Invalid value for game choice: $choice".asLeft
     }
 }

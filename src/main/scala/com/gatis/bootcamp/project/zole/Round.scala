@@ -15,7 +15,7 @@ case class Round private (
   firstHand: Player,
   turn: Player,
   makesGameChoice: Player,
-  playersPassed: Int,
+  passed: List[Player],
   tableCards: TableCards
 ) {
 
@@ -28,7 +28,7 @@ case class Round private (
       tricks.map(_.winner).exists(_.contains(solo))
     )
 
-  def calculateScores: Either[ErrorMessage, Map[Player, Int]] = {
+  private def calculateScores: Either[ErrorMessage, Map[Player, Int]] = {
     val roundIncomplete = "Scores can be calculated only once the round is complete.".asLeft
     if (isComplete)
       game.fold(roundIncomplete)(gameType =>
@@ -41,6 +41,11 @@ case class Round private (
       )
     else roundIncomplete
   }
+
+  def score(player: Player) = calculateScores.flatMap(
+    _.get(player).fold(s"Unexpected error: $player's score not found".asLeft[Int])(_.asRight)
+  )
+
   def whoPlayedCardInCurrentTrick(card: Card): Either[ErrorMessage, Player] = hands
     .find({ case (_, cards) => cards.contains(card) })
     .map({ case (player, _) => player })
@@ -78,7 +83,7 @@ case class Round private (
     else "You are trying to stash cards you don't have".asLeft
   )
 
-  def pass(next: Player) = copy(makesGameChoice = next, playersPassed = playersPassed + 1)
+  def pass(player: Player, next: Player) = copy(makesGameChoice = next, passed = player :: passed)
 
   def playCard(player: Player, next: Player, card: Card) = {
 
@@ -137,5 +142,5 @@ object Round {
     tableCards: Set[Card]
   ): Either[ErrorMessage, Round] = for {
     tableCards <- TableCards.of(tableCards)
-  } yield Round(None, None, hands, Nil, first, first, first, 0, tableCards)
+  } yield Round(None, None, hands, Nil, first, first, first, Nil, tableCards)
 }
