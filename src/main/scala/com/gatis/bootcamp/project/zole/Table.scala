@@ -13,16 +13,14 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
 
   def hasPlayerNamed(name: String) = players.exists(_.name == name)
 
-  def playerWithId(id: String) = players
-    .find(_.id == id)
-    .fold(s"Player with id $id is not sitting at this table.".asLeft[Player])(_.asRight)
+  def playerWithId(id: String) =
+    players.find(_.id == id).toRight(s"Player with id $id is not sitting at this table.")
 
   def playersNeeded = 3 - players.length
 
   def morePlayersNeeded = playersNeeded > 0
 
-  def getRound =
-    round.fold(s"Need $playersNeeded more players to start playing.".asLeft[Round])(_.asRight)
+  def getRound = round.toRight(s"Need $playersNeeded more players to start playing.")
 
   def nextAfter(player: Player) =
     getRound.map(_ => players((players.indexOf(player) + 1) % players.length))
@@ -163,7 +161,7 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
       playerNeedsToAct = player == needsToAct
       passed <- passedOrdered
       basicInfo = getGameTypeInfo(game) + getActionInfo(playerNeedsToAct, needsToAct, game, passed)
-      info <- game.fold((basicInfo).asRight[ErrorMessage])(_ =>
+      info <- game.fold(basicInfo.asRight[ErrorMessage])(_ =>
         for {
           soloInfo <- getSoloInfo(player)
           playedCards <- whoPlayedWhatInCurrentTrickInOrder

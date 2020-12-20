@@ -42,9 +42,8 @@ case class Round private (
     else roundIncomplete
   }
 
-  def score(player: Player) = calculateScores.flatMap(
-    _.get(player).fold(s"Unexpected error: $player's score not found".asLeft[Int])(_.asRight)
-  )
+  def score(player: Player) =
+    calculateScores.flatMap(_.get(player).toRight(s"Unexpected error: $player's score not found"))
 
   def whoPlayedCardInCurrentTrick(card: Card): Either[ErrorMessage, Player] = hands
     .find({ case (_, cards) => cards.contains(card) })
@@ -56,9 +55,7 @@ case class Round private (
   )(_.cards.reverse.map(card => whoPlayedCardInCurrentTrick(card).map((_, card))).sequence)
 
   private def cardPlayedInCurrentTrick(player: Player) = tricks.headOption.fold(Option.empty[Card])(
-    _.cards
-      .find(card => whoPlayedCardInCurrentTrick(card) == player)
-      .fold(Option.empty[Card])(_.some)
+    _.cards.find(card => whoPlayedCardInCurrentTrick(card) == player)
   )
 
   def setSolo(player: Player) = copy(playsSolo = Some(player))
@@ -70,9 +67,8 @@ case class Round private (
       copy(tableCards = TableCards.empty, hands = hands.updated(player, cards ++ tableCards.cards))
     )
 
-  private def playersCards(player: Player) = hands
-    .get(player)
-    .fold(s"Unexpected error: $player's cards not found".asLeft[Set[Card]])(_.asRight)
+  private def playersCards(player: Player) =
+    hands.get(player).toRight(s"Unexpected error: $player's cards not found")
 
   def playersHand(player: Player) =
     playersCards(player).map(cards => cardPlayedInCurrentTrick(player).fold(cards)(cards - _))
@@ -120,6 +116,14 @@ case class Round private (
       else hands.asRight
     )
 
+    def nextTurn(tricks: List[Trick]): Either[ErrorMessage, Player] =
+      // TODO implement, change to operate on headoption
+      ???
+    // tricks match {
+    //   case Nil          => "Unexpected error: list of tricks is empty."
+    //   case head :: rest => head.winner
+    // }
+
     if (isComplete)
       "The round is complete, no cards can be played. You may start a new round.".asLeft
     else
@@ -128,7 +132,8 @@ case class Round private (
           for {
             tricks <- newTricks
             hands <- newHands(tricks)
-          } yield copy(hands = hands, tricks = tricks, turn = next)
+            turn <- nextTurn(tricks)
+          } yield copy(hands = hands, tricks = tricks, turn = turn)
         else "You are trying to play a card you don't have".asLeft
       })
   }

@@ -28,6 +28,10 @@ case class Trick private (cards: List[Card], winner: Option[Player]) {
   def setWinner(player: Player) =
     if (isComplete) copy(winner = player.some).asRight
     else "A winner can be set only for complete trickes".asLeft
+
+  def getWinner =
+    if (isComplete) winner.toRight("Unexpected error: winner not set for a complete trick.")
+    else "A winner is available only for complete tricks.".asLeft
 }
 
 object Trick {
