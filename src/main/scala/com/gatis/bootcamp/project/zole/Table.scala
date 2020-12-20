@@ -31,7 +31,7 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
 
   def getTableCards = getRound.map(_.tableCards)
 
-  def whoPlayedWhatInCurrentTrickInOrder = getRound.flatMap(_.whoPlayedWhatInCurrentTrickOrdered)
+  def whoPlayedWhatInCurrentTrickOrdered = getRound.map(_.whoPlayedWhatInCurrentTrickOrdered)
 
   def playersHand(id: String): Either[ErrorMessage, List[Card]] = for {
     round <- getRound
@@ -164,7 +164,7 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
       info <- game.fold(basicInfo.asRight[ErrorMessage])(_ =>
         for {
           soloInfo <- getSoloInfo(player)
-          playedCards <- whoPlayedWhatInCurrentTrickInOrder
+          playedCards <- whoPlayedWhatInCurrentTrickOrdered
         } yield basicInfo + soloInfo + getCurrentTrickInfo(playerNeedsToAct, playedCards)
       )
     } yield info

@@ -4,36 +4,44 @@ import cats.syntax.either._
 import cats.syntax.option._
 
 // stiķis
-case class Trick private (cards: List[Card], winner: Option[Player]) {
-  private def containsTrump = cards.exists(_.isTrump)
-  def points = cards.foldLeft(0)((acc, card) => acc + card.points)
+case class Trick private (cardsPlayed: List[(Player, Card)]) {
+  private def containsTrump = cardsPlayed.exists({ case (_, card) => card.isTrump })
+  def points = cardsPlayed.foldLeft(0)({ case (acc, (_, card)) => acc + card.points })
 
-  def winningCard = {
-    val incomplete = "Winning cards can be decided only for complete tricks.".asLeft[Card]
-    cards.lastOption.fold(incomplete)(first =>
+  def winner = {
+    implicit val completeTrickCardOrdering = new Ordering[(Player, Card)] {
+      override def compare(one: (Player, Card), other: (Player, Card)): Int = (one, other) match {
+        case ((_, oneCard), (_, otherCard)) => oneCard.compare(otherCard)
+      }
+    }
+    val incomplete = "Winning cards can be decided only for complete tricks.".asLeft[Player]
+
+    cardsPlayed.lastOption.fold(incomplete) { case (_, firstCard) =>
       if (isComplete)
-        if (containsTrump) cards.max.asRight
-        // for non-trump cards, the round is decided by the strongest card of demanded suit, so order here is important
-        else cards.filter(_.suit == first.suit).max.asRight
+        if (containsTrump)
+          cardsPlayed max match { case (player, _) => player.asRight }
+        // for non-trump cards, the winner is decided by the strongest card of demanded suit, so order here is important
+        else
+          cardsPlayed.filter { case (_, card) => card.suit == firstCard.suit } max match {
+            case (player, _) => player.asRight
+          }
       else incomplete
-    )
+    }
   }
 
-  def isComplete = cards.length >= 3
+  def isComplete = cardsPlayed.length >= 3
 
-  def add(card: Card) =
-    if (isComplete) "This trick is already complete and has 3 cards, can't add more".asLeft
-    else copy(cards = card :: cards).asRight
+  def add(card: Card, player: Player) =
+    if (isComplete) "This trick is already has 3 cards and is complete, can't add more".asLeft
+    else copy(cardsPlayed = (player, card) :: cardsPlayed).asRight
 
-  def setWinner(player: Player) =
-    if (isComplete) copy(winner = player.some).asRight
-    else "A winner can be set only for complete trickes".asLeft
+  def whoPlayed(card: Card) = cardsPlayed
+    .find { case (player, aCard) => card == aCard }
+    .toRight("This card was not played in the current trick.")
+    .map { case (player, _) => player }
 
-  def getWinner =
-    if (isComplete) winner.toRight("Unexpected error: winner not set for a complete trick.")
-    else "A winner is available only for complete tricks.".asLeft
 }
 
 object Trick {
-  def start(card: Card) = Trick(card :: Nil, None)
+  def start(card: Card, player: Player) = Trick((player, card) :: Nil)
 }

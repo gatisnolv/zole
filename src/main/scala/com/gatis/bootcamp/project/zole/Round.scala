@@ -20,7 +20,8 @@ case class Round private (
 ) {
 
   // the last trick is either the last complete trick if new one has not yet started or the cards forming the new one
-  def lastTrick = tricks.headOption.fold(Set.empty[Card])(_.cards.toSet)
+  // def lastTrick =
+  //   tricks.headOption.fold(Set.empty[Card])(_.cardsPlayed.map({ case (_, card) => card }).toSet)
 
   // round is complete if all cards have been played or if the game type is SmallZole and solo has picked up a trick
   def isComplete = tricks.length == 8 && tricks.forall(_.isComplete) ||
@@ -33,6 +34,7 @@ case class Round private (
     if (isComplete)
       game.fold(roundIncomplete)(gameType =>
         gameType match {
+          // TODO implement score calculation
           case Big       => ???
           case Zole      => ???
           case SmallZole => ???
@@ -45,17 +47,15 @@ case class Round private (
   def score(player: Player) =
     calculateScores.flatMap(_.get(player).toRight(s"Unexpected error: $player's score not found"))
 
-  def whoPlayedCardInCurrentTrick(card: Card): Either[ErrorMessage, Player] = hands
-    .find({ case (_, cards) => cards.contains(card) })
-    .map({ case (player, _) => player })
-    .toRight("This card was not played in the current trick.")
+  // def whoPlayedCardInCurrentTrick(card: Card): Either[ErrorMessage, Player] = tricks.headOption
+  //   .toRight("No cards have been played in this round yet")
+  //   .flatMap(_.whoPlayed(card))
 
-  def whoPlayedWhatInCurrentTrickOrdered = tricks.headOption.fold(
-    List.empty[(Player, Card)].asRight[String]
-  )(_.cards.reverse.map(card => whoPlayedCardInCurrentTrick(card).map((_, card))).sequence)
+  def whoPlayedWhatInCurrentTrickOrdered =
+    tricks.headOption.fold(List.empty[(Player, Card)])(_.cardsPlayed.reverse)
 
   private def cardPlayedInCurrentTrick(player: Player) = tricks.headOption.fold(Option.empty[Card])(
-    _.cards.find(card => whoPlayedCardInCurrentTrick(card) == player)
+    _.cardsPlayed.find { case (playedBy, _) => playedBy == player }.map { case (_, card) => card }
   )
 
   def setSolo(player: Player) = copy(playsSolo = Some(player))
@@ -81,29 +81,16 @@ case class Round private (
 
   def pass(player: Player, next: Player) = copy(makesGameChoice = next, passed = player :: passed)
 
+  // TODO could simplify a bit in the sense that, since tricks now keep players who played cards,
+  // no point to keep the current trick cards in players hands while trick is ongoing any longer
   def playCard(player: Player, next: Player, card: Card) = {
 
     def newTricks = tricks match {
-      case Nil => (Trick.start(card) :: Nil).asRight
+      case Nil => (Trick.start(card, player) :: Nil).asRight
       case current :: rest =>
-        if (current.isComplete) (Trick.start(card) :: tricks).asRight[ErrorMessage]
-        else
-          for {
-            withCardAdded <- current.add(card)
-            newTrick <-
-              if (withCardAdded.isComplete)
-                trickWinner(withCardAdded).flatMap(withCardAdded.setWinner(_))
-              else withCardAdded.asRight
-          } yield newTrick :: rest
+        if (current.isComplete) (Trick.start(card, player) :: tricks).asRight[ErrorMessage]
+        else current.add(card, player).map(_ :: rest)
     }
-
-    def trickWinner(trick: Trick) =
-      if (trick.isComplete)
-        for {
-          card <- trick.winningCard
-          player <- whoPlayedCardInCurrentTrick(card)
-        } yield player
-      else "A winner can be decided only for complete tricks.".asLeft
 
     def newHands(tricks: List[Trick]) = tricks.headOption.fold(hands.asRight[ErrorMessage])(trick =>
       if (trick.isComplete)
@@ -117,12 +104,9 @@ case class Round private (
     )
 
     def nextTurn(tricks: List[Trick]): Either[ErrorMessage, Player] =
-      // TODO implement, change to operate on headoption
-      ???
-    // tricks match {
-    //   case Nil          => "Unexpected error: list of tricks is empty."
-    //   case head :: rest => head.winner
-    // }
+      tricks.headOption.fold("Unexpected error: list of tricks is empty.".asLeft[Player])(trick =>
+        if (trick.isComplete) trick.winner else next.asRight
+      )
 
     if (isComplete)
       "The round is complete, no cards can be played. You may start a new round.".asLeft
