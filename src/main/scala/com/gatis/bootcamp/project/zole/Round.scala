@@ -27,26 +27,15 @@ case class Round private (
   // round is complete if all cards have been played or if the game type is SmallZole and solo has picked up a trick
   def isComplete = tricks.length == 8 && tricks.forall(_.isComplete) ||
     game.contains(SmallZole) && playsSolo.fold(false)(solo =>
-      tricks.map(_.winner).exists(_.contains(solo))
+      tricks.map(_.taker).exists(_.contains(solo))
     )
 
-  private def calculateScores: Either[ErrorMessage, Map[Player, Int]] = {
-    val roundIncomplete = "Scores can be calculated only once the round is complete.".asLeft
+  def score(player: Player): Either[ErrorMessage, Int] = {
+    val roundIncomplete = "Scores can be calculated only once the round is complete.".asLeft[Int]
     if (isComplete)
-      game.fold(roundIncomplete)(gameType =>
-        gameType match {
-          // TODO implement score calculation
-          case Big       => ???
-          case Zole      => ???
-          case SmallZole => ???
-          case TheTable  => ???
-        }
-      )
+      game.fold(roundIncomplete)(ScoreProvider.score(player, _, tricks, playsSolo))
     else roundIncomplete
   }
-
-  def score(player: Player) =
-    calculateScores.flatMap(_.get(player).toRight(s"Unexpected error: $player's score not found"))
 
   def whoPlayedWhatInCurrentTrickOrdered =
     tricks.headOption.fold(List.empty[(Player, Card)])(_.cardsPlayed.reverse)
@@ -87,7 +76,7 @@ case class Round private (
 
     def nextTurn(tricks: List[Trick]): Either[ErrorMessage, Player] =
       tricks.headOption.fold("Unexpected error: list of tricks is empty.".asLeft[Player])(trick =>
-        if (trick.isComplete) trick.winner else next.asRight
+        if (trick.isComplete) trick.taker else next.asRight
       )
 
     if (isComplete)

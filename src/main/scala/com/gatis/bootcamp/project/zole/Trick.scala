@@ -22,7 +22,7 @@ case class Trick private (cardsPlayed: List[(Player, Card)]) {
   //   .toRight("This card was not played in the current trick.")
   //   .map { case (player, _) => player }
 
-  def winner = {
+  def taker = {
     implicit val completeTrickCardOrdering = new Ordering[(Player, Card)] {
       override def compare(one: (Player, Card), other: (Player, Card)): Int = (one, other) match {
         case ((_, oneCard), (_, otherCard)) => oneCard.compare(otherCard)
