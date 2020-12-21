@@ -10,8 +10,13 @@ import scala.concurrent.duration._
 object ZoleServer extends IOApp {
   override def run(args: List[String]): IO[ExitCode] = for {
 
-    // TODO choose duration that make sense
-    cache <- Cache.of[IO, String, Table](10.minutes, 2.minutes)
+    /*  The cache used is almost exactly the same as the one done for the shared state homework.
+    I started to use this cache as a way to store the application state
+    with the intention to later switch this out for something more persistent
+    (a database). Due to time constraints I did not get around to that.
+     */
+
+    cache <- Cache.of[IO, String, Table](1.hour, 10.minutes)
     _ <- BlazeServerBuilder[IO](ExecutionContext.global)
       .bindHttp(port = 9001, host = "localhost")
       .withHttpApp(httpApp(cache))

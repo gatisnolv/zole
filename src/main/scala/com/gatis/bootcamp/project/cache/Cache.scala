@@ -7,12 +7,6 @@ import cats.implicits._
 
 import scala.concurrent.duration._
 
-/*  Almost exactly the same as done for the shared state homework.
-    I started to use this cache as a way to store the application state
-    with the intention to later switch this out for something more persistent
-    (a database). Due to time constraints I did not get around to that.
- */
-
 object ExpiringCache {
 
   trait Cache[F[_], K, V] {
