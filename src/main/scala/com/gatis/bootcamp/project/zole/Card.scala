@@ -52,8 +52,6 @@ object Card {
     val eithers = for {
       suit <- Suit.ordered
       rank <- Rank.ordered
-      // } yield Card.of(rank.toString + suit.toString)
-      // for ease while developing - easier visual checking, when suits' toString gives emoji
     } yield Card.of(rank.toString + suit.character.toString)
 
     eithers.foldLeft(Set.empty[Card])((acc, el) =>

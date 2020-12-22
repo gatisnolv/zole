@@ -19,6 +19,7 @@ sealed abstract class ZoleOrBigCategory(
       if (isSolo) zoleSoloScore
       else zoleOpponentScore
     )
+
 }
 
 sealed abstract class SmallZoleOrTableCategory(soloScore: Int, opponentScore: Int)
@@ -41,23 +42,13 @@ object ScoreProvider {
   // (there is no actual 'solo' player in the game type TheTable)
   case object TheTableCategory extends SmallZoleOrTableCategory(-4, 2)
 
-  private def points(
-    playedAlone: Boolean,
-    player: Player,
-    tricks: List[Trick]
-  ): Either[ErrorMessage, Int] = {
-
-    def pointsFromTricksTaken(player: Player) = tricks.foldLeft(0.asRight[ErrorMessage])(
-      (acc, trick) =>
-        for {
-          taker <- trick.taker
-          counted <- acc
-        } yield if (taker == player) counted + trick.points else counted
-    )
-
-    if (playedAlone) pointsFromTricksTaken(player)
-    else pointsFromTricksTaken(player).map(120 - _)
-  }
+  def points(tricks: List[Trick], player: Player) = tricks.foldLeft(0.asRight[ErrorMessage])(
+    (acc, trick) =>
+      for {
+        taker <- trick.taker
+        counted <- acc
+      } yield if (taker == player) counted + trick.points else counted
+  )
 
   private def trickCounts(tricks: List[Trick]) = tricks.foldLeft(
     Map.empty[Player, Int].asRight[ErrorMessage]
@@ -72,10 +63,9 @@ object ScoreProvider {
     player: Player,
     gameType: GameType,
     tricks: List[Trick],
-    playsSolo: Option[Player]
+    playsSolo: Option[Player],
+    tableCards: TableCards
   ): Either[ErrorMessage, Int] = {
-
-    def trickCount(player: Player) = trickCounts(tricks).map(_.getOrElse(player, 0))
 
     def isSolo = playsSolo.contains(player)
 
@@ -86,11 +76,19 @@ object ScoreProvider {
     else
       playsSolo.fold(missingSolo(gameType))(solo =>
         for {
-          tricksTaken <- trickCount(solo)
-          points <- points(isSolo, solo, tricks)
+          soloTrickCount <- trickCounts(tricks).map(_.getOrElse(solo, 0))
+          tricksTaken = if (isSolo) soloTrickCount else 8 - soloTrickCount
           score <-
             if (gameType == SmallZole) scoreSmallZole(isSolo, tricksTaken).asRight
-            else scoreBigOrZole(gameType, points, isSolo, tricksTaken)
+            else
+              points(tricks, solo).flatMap(points =>
+                scoreBigOrZole(
+                  gameType,
+                  points + (if (gameType == Big) tableCards.points else 0),
+                  isSolo,
+                  tricksTaken
+                )
+              )
         } yield score
       )
   }
@@ -112,24 +110,23 @@ object ScoreProvider {
             Points61To90.score(isSolo, isBig)
           else PointsAbove90.score(isSolo, isBig)
       }).asRight
-    else s"Unexpected error: $gameType should be scored with different method".asLeft
+    else s"Unexpected error: $gameType should be scored with a different method".asLeft
 
   }
 
   private def scoreTheTable(player: Player, tricks: List[Trick]) = {
     def getLoser = {
-      val maxTrickCount = trickCounts(tricks).map(_.toList.map({ case (_, count) => count }).max)
+      val maxTrickCount = trickCounts(tricks).map(_.map({ case (_, count) => count }).max)
       for {
         max <- maxTrickCount
         counts <- trickCounts(tricks)
         pointsOfPlayersWithMostTricks <- counts.toList
           .filter({ case (_, count) => count == max })
-          .map({ case (player, _) => points(true, player, tricks).map((player, _)) })
+          .map({ case (player, _) => points(tricks, player).map((player, _)) })
           .sequence
       } yield pointsOfPlayersWithMostTricks.maxBy { case (_, score) => score } match {
         case (player, _) => player
       }
-
     }
 
     getLoser.map(loser => TheTableCategory.score(player == loser))

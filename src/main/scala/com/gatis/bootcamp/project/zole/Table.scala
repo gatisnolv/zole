@@ -1,8 +1,6 @@
 package com.gatis.bootcamp.project.zole
 
 import scala.util.Random
-import com.gatis.bootcamp.project.zole.Rank._
-import com.gatis.bootcamp.project.zole.Suit._
 import com.gatis.bootcamp.project.zole.Card._
 import cats.syntax.either._
 import cats.syntax.option._
@@ -31,16 +29,13 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
 
   def getTableCards = getRound.map(_.tableCards)
 
-  def whoPlayedWhatInCurrentTrickOrdered = getRound.map(_.whoPlayedWhatInCurrentTrickOrdered)
+  def whoPlayedWhatInLastTrickOrdered = getRound.map(_.lastTrick)
 
   def hand(id: String): Either[ErrorMessage, List[Card]] = for {
     round <- getRound
     player <- playerWithId(id)
     hand <- round.hand(player)
   } yield Table.arrangeCardsInHand(hand)
-
-  // different from turnToMakeGameChoice in that doesn't error when gameType is set, not sure if I'll need this yet
-  // def whoDeterminedGameType = ???
 
   def turnToMakeGameChoice = for {
     round <- getRound
@@ -90,7 +85,8 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
   def turnToPlayCard = for {
     round <- getRound
     result <-
-      if (gameChoiceExpected)
+      if (roundIsComplete) "The round is complete, an new round can be started".asLeft
+      else if (gameChoiceExpected)
         turnToMakeGameChoice.flatMap(makesChoice =>
           s"$makesChoice needs to make a game choice before anybody can play a card.".asLeft
         )
@@ -101,73 +97,90 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
       else round.turn.asRight
   } yield result
 
-  def cardCanBePlayed = turnToPlayCard.isRight
+  def cardCanBePlayed = turnToPlayCard.isRight && !roundIsComplete
+
+  def roundIsComplete = round.fold(false)(_.isComplete == true)
 
   def turnOrderInfo = getRound.map(_ =>
     "Players turns are in the following order: " +
       players.mkString(" -> ") + players.headOption.fold("")(first => s" (-> $first)")
   )
 
-  def statusInfo(id: String) = {
+  def scores(id: String) = for {
+    _ <- playerWithId(id)
+    _ <- getRound
+  } yield players.map(player => s"${player.name}: ${player.score}").mkString(", ")
 
-    def getGameTypeInfo(game: Option[GameType]) = game.fold(
-      "The game type has not yet been determined"
-    )(gameType => s"The game type is $gameType") + ". "
+  def getCurrentTrickInfo(id: String): Either[ErrorMessage, String] = for {
+    player <- playerWithId(id)
+    prefix = if (roundIsComplete) "The round is complete." else ""
+    info <- getGame.flatMap(game =>
+      game.fold("The game type has not yet been determined. ".asRight[String])(gameType =>
+        if (cardCanBePlayed)
+          for {
+            cardsPlayed <- whoPlayedWhatInLastTrickOrdered
+            turn <- turnToPlayCard
+            playerNeedsToAct = turn == player
+            addressOfPlayer = if (playerNeedsToAct) "You" else "They"
+          } yield (cardsPlayed match {
+            case Nil =>
+              s"No cards have been played in this trick yet. $addressOfPlayer may play any card."
+            case (_, first) :: _ =>
+              prefix + cardsPlayed
+                .map({ case (player, card) => s"$player played $card" })
+                .mkString(" and ") + "."
+          }) + s" The game type is $gameType. "
+        else "".asRight
+      )
+    )
+  } yield info
 
-    def getSoloInfo(player: Player) =
+  def getSoloInfo(id: String) = for {
+    player <- playerWithId(id)
+    _ <- getGame
+    info <-
       if (roundHasSoloPlayer)
         for {
           solo <- soloPlayer
           opponents <- soloPlayersOpponents
         } yield
-          (if (player == solo) " Your are" else s"$solo is") +
-            s"playing solo against ${opponents.map(_.name).mkString(" and ")}. "
-      else " This game type does not have a solo player. ".asRight
+          (if (player == solo) "Your are" else s"$solo is") +
+            s" playing solo against ${opponents.map(_.name).mkString(" and ")}. "
+      else "This game type does not have a solo player. ".asRight
+  } yield info
 
-    def getActionInfo(
-      playerNeedsToAct: Boolean,
-      whoNeedsToAct: Player,
-      game: Option[GameType],
-      passed: List[Player]
-    ) = s"It's ${if (playerNeedsToAct) "your" else s"$whoNeedsToAct's"} turn to " +
-      game.fold("make a game choice" + (passed match {
-        case _ :: _ => ". " + passed.mkString(" and ") + " already passed"
-        case _      => ""
-      }))(_ => if (soloNeedsToStash) "stash two cards" else "play a card") + "."
+  def getActionInfo(id: String) =
+    if (roundIsComplete) "The round is complete, a new round can be started.".asRight
+    else
+      for {
+        player <- playerWithId(id)
+        game <- getGame
+        needsToAct <-
+          if (gameChoiceExpected) turnToMakeGameChoice
+          else if (soloNeedsToStash) soloIfNeedsToStash
+          else turnToPlayCard
+        playerNeedsToAct = player == needsToAct
+        passed <- passedOrdered
+      } yield s"It's ${if (playerNeedsToAct) "your" else s"$needsToAct's"} turn to " +
+        game.fold("make a game choice" + (passed match {
+          case _ :: _ => ". " + passed.mkString(" and ") + " already passed"
+          case _      => ""
+        }))(_ => if (soloNeedsToStash) "stash two cards" else "play a card") + ". "
 
-    def getCurrentTrickInfo(playerNeedsToAct: Boolean, playedCards: List[(Player, Card)]) = {
-      val addressOfPlayer = if (playerNeedsToAct) "You" else "They"
-      addressOfPlayer + (playedCards match {
-        case Nil => " may play any card"
-        case (_, card) :: _ =>
-          s" must play a ${if (card.isTrump) "trump card"
-          else s"card of ${card.suit.name} suit"} if ${addressOfPlayer.toLowerCase} have one. " +
-            playedCards
-              .map({ case (player, card) => s"$player played $card" })
-              .mkString(" and ")
-      }) + ". "
-    }
-
-    def tableReadyInfo: Either[ErrorMessage, String] = for {
-      player <- playerWithId(id)
+  def statusInfo(id: String) = {
+    val status = for {
       game <- getGame
-      needsToAct <-
-        if (gameChoiceExpected) turnToMakeGameChoice
-        else if (soloNeedsToStash) soloIfNeedsToStash
-        else turnToPlayCard
-      playerNeedsToAct = player == needsToAct
-      passed <- passedOrdered
-      basicInfo = getGameTypeInfo(game) + getActionInfo(playerNeedsToAct, needsToAct, game, passed)
-      info <- game.fold(basicInfo.asRight[ErrorMessage])(_ =>
+      actionInfo <- getActionInfo(id)
+      info <- game.fold(actionInfo.asRight[ErrorMessage])(_ =>
         for {
-          soloInfo <- getSoloInfo(player)
-          playedCards <- whoPlayedWhatInCurrentTrickOrdered
-        } yield basicInfo + soloInfo + getCurrentTrickInfo(playerNeedsToAct, playedCards)
+          soloInfo <- getSoloInfo(id)
+          playedCards <- whoPlayedWhatInLastTrickOrdered
+          currentTrickInfo <- getCurrentTrickInfo(id)
+        } yield actionInfo + currentTrickInfo + soloInfo
       )
     } yield info
 
-    // check whether this makes sense
-    tableReadyInfo.fold(identity(_), identity(_))
+    getGame.fold(_.asRight, _ => status)
   }
 
   def gameChoiceInfo(gamePreChoice: Option[GameType]): Either[ErrorMessage, String] = gamePreChoice
@@ -178,14 +191,13 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
            else "") + s" The game type will be $gameType."
         )
       )
-    )(_ => "The game type was already set".asLeft[String])
+    )(_ => "The game type was already set.".asLeft[String])
 
   def seatPlayer(name: String, id: String): Either[ErrorMessage, Table] =
     if (morePlayersNeeded)
       if (hasPlayerNamed(name))
         s"There is already someone at the table with name $name, please use a different name.".asLeft
       else {
-        // a choice to have the first seated be the starting player, so appending here
         val newTable = copy(players = players :+ Player.of(name, id))
         if (newTable.morePlayersNeeded) newTable.asRight else newTable.firstRound
       }
@@ -254,7 +266,8 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
     case _                      => s"Need $playersNeeded more players to start playing.".asLeft
   }
 
-  def nextRound = for {
+  def nextRound(id: String) = for {
+    _ <- playerWithId(id)
     round <- getRound
     next <-
       if (round.isComplete) for {
@@ -272,48 +285,23 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
       s"3 players needed to play, there are now only ${players.length}.".asLeft
     else {
       val deal = Table.dealCards
-      // question is this 'sanity' check really needed here?
-      if (deal.nonEmpty && deal.init.forall(_.size == 8)) {
-        // q about use of init, last with regards to exception throwing, I guess, could wrap with Try
-        val playersCards = (players zip deal.init).toMap
-        Round.start(first, playersCards, deal.last).map(round => copy(round = round.some))
-      }
-      // This should be a 5xx
-      else "Unexpected error: dealing cards".asLeft
-
+      if (
+        deal.nonEmpty && deal.length == 4 && deal.init.forall(_.size == 8) && deal.last.size == 2
+      ) {
+        val hands = (players zip deal.init).toMap
+        Round
+          .start(first, hands, deal.last)
+          .map(round => copy(players = players, round = round.some))
+      } else "Unexpected error: dealing cards".asLeft
     }
 }
 
-// extends App for quick testing
-object Table extends App {
-  // write a test for this that it returns a list of 8,8,8,2 sets of cards
-  def dealCards = Random.shuffle(allCards.toList).sliding(8, 8).toList.map(_.toSet)
+object Table {
 
   def empty = Table(Nil, None)
 
+  def dealCards = Random.shuffle(allCards.toList).sliding(8, 8).toList.map(_.toSet)
+
   def arrangeCardsInHand(cards: Set[Card]) = cards.toList.sorted(Card.InHandPrettyOrdering).reverse
-
-  println(allCards.toList.sorted.reverse)
-  println(arrangeCardsInHand(allCards))
-  println(dealCards.toList map arrangeCardsInHand)
-  println(dealCards.toList map arrangeCardsInHand)
-  println(s"total points add up to 120: ${allCards.foldLeft(0)((acc, card) => acc + card.points)}")
-
-  def queen(suit: Suit) = Card(Queen, suit)
-  def nineHearts = Card(Nine, Hearts)
-  def tenHearts = Card(Ten, Hearts)
-  def aceClubs = Card(Ace, Clubs)
-  def sevenDiamonds = Card(Seven, Diamonds)
-
-  // println((Trick.of(queen(Clubs), queen(Diamonds), queen(Spades))).decideTrickWinner)
-  // println((Trick.of(queen(Spades), queen(Diamonds), queen(Clubs))).decideTrickWinner)
-  // println((Trick.of(nineHearts, tenHearts, aceClubs)).decideTrickWinner)
-  // println((Trick.of(nineHearts, tenHearts, sevenDiamonds)).decideTrickWinner)
-
-  // println(Trick.of(nineHearts, tenHearts, aceClubs).points)
-
-  val testTable = Table(List(Player.of("a", "1"), Player.of("b", "2"), Player.of("c", "3")), None)
-  val firstPlayer = testTable.players(0)
-  println(testTable.nextAfter(firstPlayer))
 
 }

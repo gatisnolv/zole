@@ -4,6 +4,7 @@ import cats.syntax.either._
 
 case class TableCards private (cards: Set[Card]) {
   def stashed = cards.nonEmpty
+  def points = cards.map(_.points).sum
 }
 
 object TableCards {

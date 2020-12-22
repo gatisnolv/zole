@@ -21,6 +21,6 @@ libraryDependencies ++= Seq(
   "ch.qos.logback" % "logback-classic" % "1.2.3",
   "io.circe" %% "circe-core" % circeVersion,
   "io.circe" %% "circe-generic" % circeVersion,
-  "org.scalactic" %% "scalactic" % "3.2.2", // what is this ??
+  "org.scalactic" %% "scalactic" % "3.2.2",
   "org.scalatest" %% "scalatest" % "3.2.2" % Test
 )
