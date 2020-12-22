@@ -11,14 +11,15 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
 
   def hasPlayerNamed(name: String) = players.exists(_.name == name)
 
-  def playerWithId(id: String) =
+  def playerWithId(id: String): Either[ErrorMessage, Player] =
     players.find(_.id == id).toRight(s"Player with id $id is not sitting at this table.")
 
   def playersNeeded = 3 - players.length
 
   def morePlayersNeeded = playersNeeded > 0
 
-  def getRound = round.toRight(s"Need $playersNeeded more players to start playing.")
+  def getRound: Either[ErrorMessage, Round] =
+    round.toRight(s"Need $playersNeeded more players to start playing.")
 
   def nextAfter(player: Player) =
     getRound.map(_ => players((players.indexOf(player) + 1) % players.length))
@@ -101,98 +102,6 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
 
   def roundIsComplete = round.fold(false)(_.isComplete == true)
 
-  def turnOrderInfo = getRound.map(_ =>
-    "Players turns are in the following order: " +
-      players.mkString(" -> ") + players.headOption.fold("")(first => s" (-> $first)")
-  )
-
-  def scores(id: String) = for {
-    _ <- playerWithId(id)
-    _ <- getRound
-  } yield players.map(player => s"${player.name}: ${player.score}").mkString(", ")
-
-  def getCurrentTrickInfo(id: String): Either[ErrorMessage, String] = for {
-    player <- playerWithId(id)
-    prefix = if (roundIsComplete) "The round is complete." else ""
-    info <- getGame.flatMap(game =>
-      game.fold("The game type has not yet been determined. ".asRight[String])(gameType =>
-        if (cardCanBePlayed)
-          for {
-            cardsPlayed <- whoPlayedWhatInLastTrickOrdered
-            turn <- turnToPlayCard
-            playerNeedsToAct = turn == player
-            addressOfPlayer = if (playerNeedsToAct) "You" else "They"
-          } yield (cardsPlayed match {
-            case Nil =>
-              s"No cards have been played in this trick yet. $addressOfPlayer may play any card."
-            case (_, first) :: _ =>
-              prefix + cardsPlayed
-                .map({ case (player, card) => s"$player played $card" })
-                .mkString(" and ") + "."
-          }) + s" The game type is $gameType. "
-        else "".asRight
-      )
-    )
-  } yield info
-
-  def getSoloInfo(id: String) = for {
-    player <- playerWithId(id)
-    _ <- getGame
-    info <-
-      if (roundHasSoloPlayer)
-        for {
-          solo <- soloPlayer
-          opponents <- soloPlayersOpponents
-        } yield
-          (if (player == solo) "Your are" else s"$solo is") +
-            s" playing solo against ${opponents.map(_.name).mkString(" and ")}. "
-      else "This game type does not have a solo player. ".asRight
-  } yield info
-
-  def getActionInfo(id: String) =
-    if (roundIsComplete) "The round is complete, a new round can be started.".asRight
-    else
-      for {
-        player <- playerWithId(id)
-        game <- getGame
-        needsToAct <-
-          if (gameChoiceExpected) turnToMakeGameChoice
-          else if (soloNeedsToStash) soloIfNeedsToStash
-          else turnToPlayCard
-        playerNeedsToAct = player == needsToAct
-        passed <- passedOrdered
-      } yield s"It's ${if (playerNeedsToAct) "your" else s"$needsToAct's"} turn to " +
-        game.fold("make a game choice" + (passed match {
-          case _ :: _ => ". " + passed.mkString(" and ") + " already passed"
-          case _      => ""
-        }))(_ => if (soloNeedsToStash) "stash two cards" else "play a card") + ". "
-
-  def statusInfo(id: String) = {
-    val status = for {
-      game <- getGame
-      actionInfo <- getActionInfo(id)
-      info <- game.fold(actionInfo.asRight[ErrorMessage])(_ =>
-        for {
-          soloInfo <- getSoloInfo(id)
-          playedCards <- whoPlayedWhatInLastTrickOrdered
-          currentTrickInfo <- getCurrentTrickInfo(id)
-        } yield actionInfo + currentTrickInfo + soloInfo
-      )
-    } yield info
-
-    getGame.fold(_.asRight, _ => status)
-  }
-
-  def gameChoiceInfo(gamePreChoice: Option[GameType]): Either[ErrorMessage, String] = gamePreChoice
-    .fold(
-      getGame.map(game =>
-        game.fold("You passed.")(gameType =>
-          (if (gameType == TheTable) "You passed last."
-           else "") + s" The game type will be $gameType."
-        )
-      )
-    )(_ => "The game type was already set.".asLeft[String])
-
   def seatPlayer(name: String, id: String): Either[ErrorMessage, Table] =
     if (morePlayersNeeded)
       if (hasPlayerNamed(name))
@@ -202,6 +111,35 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
         if (newTable.morePlayersNeeded) newTable.asRight else newTable.firstRound
       }
     else "There are 3 players at this table already.".asLeft
+
+  def nextRound(id: String) = for {
+    _ <- playerWithId(id)
+    round <- getRound
+    next <-
+      if (round.isComplete) for {
+        next <- nextAfter(round.firstHand)
+        scoredPlayers <- players
+          .map(player => round.score(player).flatMap(score => player.updateScore(score).asRight))
+          .sequence
+        table <- newRound(next, scoredPlayers)
+      } yield table
+      else "Next round can be started only when the current is finished.".asLeft
+  } yield next
+
+  private def newRound(first: Player, players: List[Player]): Either[ErrorMessage, Table] =
+    if (players.length < 3)
+      s"3 players needed to play, there are now only ${players.length}.".asLeft
+    else {
+      val deal = Table.dealCards
+      if (
+        deal.nonEmpty && deal.length == 4 && deal.init.forall(_.size == 8) && deal.last.size == 2
+      ) {
+        val hands = (players zip deal.init).toMap
+        Round
+          .start(first, hands, deal.last)
+          .map(round => copy(players = players, round = round.some))
+      } else "Unexpected error: dealing cards".asLeft
+    }
 
   def makeGameChoice(id: String, choice: String): Either[ErrorMessage, Table] = {
 
@@ -266,34 +204,92 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
     case _                      => s"Need $playersNeeded more players to start playing.".asLeft
   }
 
-  def nextRound(id: String) = for {
-    _ <- playerWithId(id)
-    round <- getRound
-    next <-
-      if (round.isComplete) for {
-        next <- nextAfter(round.firstHand)
-        scoredPlayers <- players
-          .map(player => round.score(player).flatMap(score => player.updateScore(score).asRight))
-          .sequence
-        table <- newRound(next, scoredPlayers)
-      } yield table
-      else "Next round can be started only when the current is finished.".asLeft
-  } yield next
+  def turnOrderInfo = getRound.map(_ =>
+    "Players turns are in the following order: " +
+      players.mkString(" -> ") + players.headOption.fold("")(first => s" (-> $first)")
+  )
 
-  private def newRound(first: Player, players: List[Player]): Either[ErrorMessage, Table] =
-    if (players.length < 3)
-      s"3 players needed to play, there are now only ${players.length}.".asLeft
-    else {
-      val deal = Table.dealCards
-      if (
-        deal.nonEmpty && deal.length == 4 && deal.init.forall(_.size == 8) && deal.last.size == 2
-      ) {
-        val hands = (players zip deal.init).toMap
-        Round
-          .start(first, hands, deal.last)
-          .map(round => copy(players = players, round = round.some))
-      } else "Unexpected error: dealing cards".asLeft
-    }
+  def gameChoiceInfo(gamePreChoice: Option[GameType]) = gamePreChoice
+    .fold(
+      getGame.map(game =>
+        game.fold("You passed.")(gameType =>
+          s"${if (gameType == TheTable) "You passed last. " else ""}The game type will be $gameType."
+        )
+      )
+    )(_ => "The game type was already set.".asLeft[String])
+
+  def scores(id: String) = for {
+    _ <- playerWithId(id)
+    _ <- getRound
+  } yield players.map(player => s"${player.name}: ${player.score}").mkString(", ")
+
+  private def getCurrentTrickInfo(id: String) = for {
+    player <- playerWithId(id)
+    prefix = if (roundIsComplete) "The round is complete." else ""
+    info <- getGame.flatMap(game =>
+      game.fold("The game type has not yet been determined.".asRight[String])(gameType =>
+        for {
+          cardsPlayed <- whoPlayedWhatInLastTrickOrdered
+          turn <- turnToPlayCard
+        } yield (cardsPlayed match {
+          case Nil =>
+            s"No cards have been played in this trick yet."
+          case (_, first) :: _ =>
+            prefix + cardsPlayed
+              .map({ case (player, card) => s"$player played $card" })
+              .mkString(", ")
+        }) + s". The game type is $gameType."
+      )
+    )
+  } yield info
+
+  private def getSoloInfo(id: String) = for {
+    player <- playerWithId(id)
+    _ <- getGame
+    info <-
+      if (roundHasSoloPlayer)
+        for {
+          solo <- soloPlayer
+          opponents <- soloPlayersOpponents
+        } yield
+          (if (player == solo) "Your are" else s"$solo is") +
+            s" playing solo against ${opponents.map(_.name).mkString(" and ")}."
+      else "This game type does not have a solo player.".asRight
+  } yield info
+
+  private def getActionInfo(id: String) =
+    if (roundIsComplete) "The round is complete, a new round can be started.".asRight
+    else
+      for {
+        player <- playerWithId(id)
+        game <- getGame
+        needsToAct <-
+          if (gameChoiceExpected) turnToMakeGameChoice
+          else if (soloNeedsToStash) soloIfNeedsToStash
+          else turnToPlayCard
+        playerNeedsToAct = player == needsToAct
+        passed <- passedOrdered
+      } yield s"It's ${if (playerNeedsToAct) "your" else s"$needsToAct's"} turn to " +
+        game.fold("make a game choice" + (passed match {
+          case _ :: _ => ". " + passed.mkString(" and ") + " already passed"
+          case _      => ""
+        }))(_ => if (soloNeedsToStash) "stash two cards" else "play a card") + "."
+
+  def statusInfo(id: String) = {
+    val status = for {
+      game <- getGame
+      actionInfo <- getActionInfo(id)
+      info <- game.fold(actionInfo.asRight[ErrorMessage])(_ =>
+        for {
+          soloInfo <- getSoloInfo(id)
+          currentTrickInfo <- getCurrentTrickInfo(id)
+        } yield s"$actionInfo $currentTrickInfo $soloInfo"
+      )
+    } yield info
+
+    getGame.fold(_.asRight, _ => status)
+  }
+
 }
 
 object Table {

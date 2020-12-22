@@ -3,10 +3,10 @@ package com.gatis.bootcamp.project.zole
 import cats.syntax.either._
 import cats.syntax.option._
 
-sealed trait GameType
 sealed abstract class GameChoice private (val shortName: String)
 
 object GameChoice {
+  trait GameType
   // lielais (pacelt galda kārtis)
   case object Big extends GameChoice("B") with GameType
   // zole

@@ -2,7 +2,7 @@ package com.gatis.bootcamp.project.zole
 
 import cats.syntax.option._
 import cats.syntax.either._
-import com.gatis.bootcamp.project.zole.GameChoice.SmallZole
+import com.gatis.bootcamp.project.zole.GameChoice._
 
 // partija
 case class Round private (
@@ -25,18 +25,7 @@ case class Round private (
       tricks.map(_.taker).exists(_.contains(solo))
     )
 
-  def score(player: Player): Either[ErrorMessage, Int] = {
-    val roundIncomplete = "Scores can be calculated only once the round is complete.".asLeft[Int]
-    if (isComplete)
-      game.fold(roundIncomplete)(ScoreProvider.score(player, _, tricks, playsSolo, tableCards))
-    else roundIncomplete
-  }
-
   def lastTrick = tricks.headOption.fold(List.empty[(Player, Card)])(_.cardsPlayed.reverse)
-
-  private def cardPlayedInCurrentTrick(player: Player) = tricks.headOption.fold(Option.empty[Card])(
-    _.cardsPlayed.find { case (playedBy, _) => playedBy == player }.map { case (_, card) => card }
-  )
 
   def setSolo(player: Player) = copy(playsSolo = player.some)
 
@@ -99,6 +88,13 @@ case class Round private (
           } yield copy(hands = hands, tricks = tricks, turn = turn)
         else "You are trying to play a card you don't have".asLeft
       })
+  }
+
+  def score(player: Player): Either[ErrorMessage, Int] = {
+    val roundIncomplete = "Scores can be calculated only once the round is complete.".asLeft[Int]
+    if (isComplete)
+      game.fold(roundIncomplete)(ScoreProvider.score(player, _, tricks, playsSolo, tableCards))
+    else roundIncomplete
   }
 
 }
