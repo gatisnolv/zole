@@ -20,10 +20,6 @@ case class Round private (
   tableCards: TableCards
 ) {
 
-  // the last trick is either the last complete trick if new one has not yet started or the cards forming the new one
-  // def lastTrick =
-  //   tricks.headOption.fold(Set.empty[Card])(_.cardsPlayed.map({ case (_, card) => card }).toSet)
-
   // round is complete if all cards have been played or if the game type is SmallZole and solo has picked up a trick
   def isComplete = tricks.length == 8 && tricks.forall(_.isComplete) ||
     game.contains(SmallZole) && playsSolo.fold(false)(solo =>
@@ -33,12 +29,11 @@ case class Round private (
   def score(player: Player): Either[ErrorMessage, Int] = {
     val roundIncomplete = "Scores can be calculated only once the round is complete.".asLeft[Int]
     if (isComplete)
-      game.fold(roundIncomplete)(ScoreProvider.score(player, _, tricks, playsSolo))
+      game.fold(roundIncomplete)(ScoreProvider.score(player, _, tricks, playsSolo, tableCards))
     else roundIncomplete
   }
 
-  def whoPlayedWhatInCurrentTrickOrdered =
-    tricks.headOption.fold(List.empty[(Player, Card)])(_.cardsPlayed.reverse)
+  def lastTrick = tricks.headOption.fold(List.empty[(Player, Card)])(_.cardsPlayed.reverse)
 
   private def cardPlayedInCurrentTrick(player: Player) = tricks.headOption.fold(Option.empty[Card])(
     _.cardsPlayed.find { case (playedBy, _) => playedBy == player }.map { case (_, card) => card }
@@ -65,13 +60,25 @@ case class Round private (
 
   def playCard(player: Player, next: Player, card: Card) = {
 
+    def attempt(trick: Trick): Either[ErrorMessage, Trick] = for {
+      first <- trick.firstCard
+      hasTrump <- hand(player).map(_.exists(_.isTrump))
+      hasSuit <- hand(player).map(_.exists(_.suit == first.suit))
+      newTrick <-
+        if (
+          first.isTrump && (card.isTrump || !hasTrump) ||
+          first.suit == card.suit || !hasSuit
+        ) trick.play(card, player)
+        else "You have to play a card of the demanded type if you have one.".asLeft
+    } yield newTrick
+
     def newHands = hand(player).map(cards => hands.updated(player, cards - card))
 
     def newTricks = tricks match {
       case Nil => (Trick.start(card, player) :: Nil).asRight
       case current :: rest =>
         if (current.isComplete) (Trick.start(card, player) :: tricks).asRight
-        else current.play(card, player).map(_ :: rest)
+        else attempt(current).map(_ :: rest)
     }
 
     def nextTurn(tricks: List[Trick]): Either[ErrorMessage, Player] =

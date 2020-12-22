@@ -13,6 +13,10 @@ case class Trick private (cardsPlayed: List[(Player, Card)]) {
 
   def isComplete = cardsPlayed.length >= 3
 
+  def firstCard = cardsPlayed.lastOption
+    .map { case (_, card) => card }
+    .toRight("Unexpected error: no first card of trick.")
+
   def play(card: Card, player: Player) =
     if (isComplete) "This trick is already has 3 cards and is complete, can't play more".asLeft
     else copy(cardsPlayed = (player, card) :: cardsPlayed).asRight

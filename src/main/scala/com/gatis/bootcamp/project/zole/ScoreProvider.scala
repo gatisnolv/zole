@@ -19,6 +19,7 @@ sealed abstract class ZoleOrBigCategory(
       if (isSolo) zoleSoloScore
       else zoleOpponentScore
     )
+
 }
 
 sealed abstract class SmallZoleOrTableCategory(soloScore: Int, opponentScore: Int)
@@ -42,9 +43,9 @@ object ScoreProvider {
   case object TheTableCategory extends SmallZoleOrTableCategory(-4, 2)
 
   private def points(
-    playedAlone: Boolean,
     player: Player,
-    tricks: List[Trick]
+    tricks: List[Trick],
+    bigTableCardPoints: Option[Int]
   ): Either[ErrorMessage, Int] = {
 
     def pointsFromTricksTaken(player: Player) = tricks.foldLeft(0.asRight[ErrorMessage])(
@@ -55,8 +56,9 @@ object ScoreProvider {
         } yield if (taker == player) counted + trick.points else counted
     )
 
-    if (playedAlone) pointsFromTricksTaken(player)
-    else pointsFromTricksTaken(player).map(120 - _)
+    pointsFromTricksTaken(player).map(points => {
+      bigTableCardPoints.fold(points)(_ + points)
+    })
   }
 
   private def trickCounts(tricks: List[Trick]) = tricks.foldLeft(
@@ -72,7 +74,8 @@ object ScoreProvider {
     player: Player,
     gameType: GameType,
     tricks: List[Trick],
-    playsSolo: Option[Player]
+    playsSolo: Option[Player],
+    tableCards: TableCards
   ): Either[ErrorMessage, Int] = {
 
     def trickCount(player: Player) = trickCounts(tricks).map(_.getOrElse(player, 0))
@@ -86,11 +89,13 @@ object ScoreProvider {
     else
       playsSolo.fold(missingSolo(gameType))(solo =>
         for {
-          tricksTaken <- trickCount(solo)
-          points <- points(isSolo, solo, tricks)
-          score <-
+          soloTrickCount <- trickCount(solo)
+          tricksTaken = if (isSolo) soloTrickCount else 8 - soloTrickCount
+          points <- points(solo, tricks, if (gameType == Big) tableCards.points.some else None)
+          score <- {
             if (gameType == SmallZole) scoreSmallZole(isSolo, tricksTaken).asRight
             else scoreBigOrZole(gameType, points, isSolo, tricksTaken)
+          }
         } yield score
       )
   }
@@ -112,7 +117,7 @@ object ScoreProvider {
             Points61To90.score(isSolo, isBig)
           else PointsAbove90.score(isSolo, isBig)
       }).asRight
-    else s"Unexpected error: $gameType should be scored with different method".asLeft
+    else s"Unexpected error: $gameType should be scored with a different method".asLeft
 
   }
 
@@ -124,12 +129,11 @@ object ScoreProvider {
         counts <- trickCounts(tricks)
         pointsOfPlayersWithMostTricks <- counts.toList
           .filter({ case (_, count) => count == max })
-          .map({ case (player, _) => points(true, player, tricks).map((player, _)) })
+          .map({ case (player, _) => points(player, tricks, None).map((player, _)) })
           .sequence
       } yield pointsOfPlayersWithMostTricks.maxBy { case (_, score) => score } match {
         case (player, _) => player
       }
-
     }
 
     getLoser.map(loser => TheTableCategory.score(player == loser))

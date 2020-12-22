@@ -89,8 +89,9 @@ object Routes {
               (table.players.foldLeft(0)((acc, el) => Math.max(acc, el.id.toInt)) + 1).toString
             )
             table <- table.seatPlayer(name, id).save(code)
+            info <- table.statusInfo(id).io
             text = s"Hello, $name, you are registered. " +
-              (if (table.morePlayersNeeded) "" else "The game can begin. ") + table.statusInfo(id)
+              (if (table.morePlayersNeeded) "" else "The game can begin. ") + info
             response <- Ok(text).map(_.addCookie("uuid", id).addCookie("code", code))
           } yield response).handleErrors
 
@@ -132,15 +133,18 @@ object Routes {
             response <- Ok(info)
           } yield response).handleErrors
 
-        case req @ POST -> Root / "play" / card =>
+        case req @ POST -> Root / "turn" / card =>
           (for {
             id <- getCookie(req, "uuid")
             code <- getCookie(req, "code")
             table <- getTable(code)
             table <- table.playCard(id, card).save(code)
-            // TODO could return hand cards post playing the card
-            // TODO continue here
-            response <- Ok()
+            hand <- table.hand(id).io
+            response <- Ok(hand match {
+              case Nil =>
+                "You played your last card of this round"
+              case _ => hand.mkString(", ")
+            })
           } yield response).handleErrors
 
         case req @ GET -> Root / "turn" =>
@@ -148,36 +152,28 @@ object Routes {
             id <- getCookie(req, "uuid")
             code <- getCookie(req, "code")
             table <- getTable(code)
-            info = table.statusInfo(id)
+            info <- table.statusInfo(id).io
             response <- Ok(info)
           } yield response).handleErrors
 
-        // look at cards of the current trick, should include who played which card
-        case req @ GET -> Root / "currentTrick" =>
+        case req @ GET -> Root / "score" =>
           (for {
             id <- getCookie(req, "uuid")
             code <- getCookie(req, "code")
             table <- getTable(code)
-            // TODO continue here
-            response <- Ok()
+            scores <- table.scores(id).io
+            response <- Ok(scores)
           } yield response).handleErrors
-
-        // TODO add endpoint for looking at last trick
-
-        // TODO endpoint for round points
-
-        // TODO endpoint for scores
 
         case req @ POST -> Root / "nextRound" =>
           (for {
             id <- getCookie(req, "uuid")
             code <- getCookie(req, "code")
             table <- getTable(code)
-            table <- table.nextRound.save(code)
-            info = table.statusInfo(id)
+            table <- table.nextRound(id).save(code)
+            info <- table.statusInfo(id).io
             text = "The next round can begin. " + info
-            // TODO continue here
-            response <- Ok()
+            response <- Ok(text)
           } yield response).handleErrors
       }
     }
