@@ -62,11 +62,11 @@ case class Round private (
     def attempt(trick: Trick): Either[ErrorMessage, Trick] = for {
       first <- trick.firstCard
       hasTrump <- hand(player).map(_.exists(_.isTrump))
-      hasSuit <- hand(player).map(_.exists(cards => card.suit == first.suit && !card.isTrump))
+      hasSuit <- hand(player).map(_.exists(card => card.suit == first.suit && !card.isTrump))
       newTrick <-
         if (
-          first.isTrump && (card.isTrump || !hasTrump) ||
-          first.suit == card.suit || !hasSuit
+          if (first.isTrump) (card.isTrump || !hasTrump)
+          else (first.suit == card.suit || !hasSuit)
         ) trick.play(card, player)
         else
           s"You have to play a card of the demanded type (${if (first.isTrump) "trump"
