@@ -225,17 +225,15 @@ case class Table private (val players: List[Player], val round: Option[Round]) {
 
   private def getCurrentTrickInfo(id: String) = for {
     player <- playerWithId(id)
-    prefix = if (roundIsComplete) "The round is complete." else ""
     info <- getGame.flatMap(game =>
       game.fold("The game type has not yet been determined.".asRight[String])(gameType =>
         for {
           cardsPlayed <- whoPlayedWhatInLastTrickOrdered
-          turn <- turnToPlayCard
         } yield (cardsPlayed match {
           case Nil =>
             s"No cards have been played in this trick yet."
           case (_, first) :: _ =>
-            prefix + cardsPlayed
+            cardsPlayed
               .map({ case (player, card) => s"$player played $card" })
               .mkString(", ")
         }) + s". The game type is $gameType."
